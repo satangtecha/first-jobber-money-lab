@@ -1,7 +1,7 @@
 import { parseBaht, formatBaht, RulesError } from './rules.js';
 import { routeDebt, cashBeforeDebt, ROUTES, DEBT_ENGINE_VERSION } from './debt-engine.js';
 import { comparePayoffScenarios, PayoffEngineError } from './payoff-engine.js';
-import { LEARNING_UNITS, unitsForRoute } from './learning-content.js';
+import { DEBT_LEARNING_UNITS, LEARNING_UNITS, MONEY_LAB_UNITS, unitsForRoute } from './learning-content.js';
 import { createDebtAction, createDebtAssessment, deleteDebtAssessment, getSessionUser, listDebtAssessments, requestMagicLink } from './api-client.js';
 
 const STORE_KEY = 'first-jobber-debt-navigator-v1';
@@ -797,10 +797,12 @@ function learnView() {
   const assessment = currentAssessment();
   const route = assessment.error ? ROUTES.PREVENTION : assessment.result.route;
   const contextual = unitsForRoute(route);
-  const units = [...contextual, ...LEARNING_UNITS.filter((unit)=>!contextual.includes(unit))];
-  const mastered = Object.values(state.mastery || {}).filter((value)=>value==='evidence_recorded').length;
+  const units = [...contextual, ...DEBT_LEARNING_UNITS.filter((unit)=>!contextual.includes(unit))];
+  const moneyMastered = MONEY_LAB_UNITS.filter((unit)=>state.mastery?.[unit.id]==='evidence_recorded').length;
   const label = (value) => ({not_started:'ยังไม่เริ่ม',understood:'เข้าใจแล้ว',action_taken:'ลงมือแล้ว',evidence_recorded:'บันทึกหลักฐานแล้ว · ผู้ใช้รายงาน'})[value || 'not_started'];
-  return `<section class="learn-hero"><div><span class="eyebrow">MASTERY PATH</span><h1>เรียนเฉพาะเรื่องที่ใช้ตัดสินใจ</h1><p>6 บทสั้น แต่ละบทจบด้วยงานที่ทำได้จริงและแหล่งข้อมูลทางการ</p></div><div class="mastery-ring" style="--mastery:${Math.round(mastered*100/LEARNING_UNITS.length)}%"><strong>${mastered}/6</strong><span>มีหลักฐานที่รายงาน</span></div></section>
+  return `<section class="learn-hero"><div><span class="eyebrow">FIRST JOBBER MONEY LAB</span><h1>3 เรื่องเงินที่ต้องใช้ตั้งแต่เงินเดือนแรก</h1><p>ภาษี การลงทุน และหนี้ แต่ละบทมี infographic คำถามเช็กความเข้าใจ และงานที่ทำได้ทันที</p></div><div class="mastery-ring" style="--mastery:${Math.round(moneyMastered*100/MONEY_LAB_UNITS.length)}%"><strong>${moneyMastered}/3</strong><span>จบบทหลัก</span></div></section>
+  <div class="money-lab-grid">${MONEY_LAB_UNITS.map((unit,index)=>{const progress=state.mastery?.[unit.id]||'not_started'; const topic=['tax','investing','debt'][index]; return `<article class="money-lab-card ${topic}"><img src="${escapeHtml(unit.infographics[0].src)}" alt="" loading="lazy"><div><span class="eyebrow">บทที่ ${index+1} · ${unit.duration_minutes} นาที · ${label(progress)}</span><h2>${escapeHtml(unit.title)}</h2><p>${escapeHtml(unit.summary)}</p><button class="primary" data-action="open-lesson" data-lesson="${unit.id}">เริ่มบทเรียน <span>→</span></button></div></article>`;}).join('')}</div>
+  <section class="route-learning-head"><span class="eyebrow">JUST-IN-TIME DEBT LESSONS</span><h2>บทเรียนแก้หนี้ตามเคส</h2><p>ระบบเรียงบทที่ตรงกับ route ของคุณไว้ก่อน</p></section>
   <div class="lesson-path">${units.map((unit,index)=>{const progress=state.mastery?.[unit.id]||'not_started'; return `<article class="${index===0?'current':''}"><div class="lesson-icon">${progress==='evidence_recorded'?'✓':'▥'}</div><div><span class="eyebrow">${contextual.includes(unit)?'ตรงกับเคสนี้':'เรียนเพิ่ม'} · ${unit.duration_minutes} นาที · ${label(progress)}</span><h2>${escapeHtml(unit.decision)}</h2><p>${escapeHtml(unit.action.label)}</p></div><button data-action="open-lesson" data-lesson="${unit.id}" aria-label="เปิดบท ${escapeHtml(unit.decision)}">→</button></article>`;}).join('')}</div>
   <section class="lesson-callout"><b>บทเรียนไม่ใช่เส้นชัย</b><p>เครื่องหมายนี้หมายถึงผู้ใช้บันทึกหลักฐานเอง เช่น เลขรับเรื่อง ข้อเสนอ หรือวันนัด ระบบยังไม่ได้ตรวจสอบกับหน่วยงานภายนอก</p></section>`;
 }
@@ -809,13 +811,20 @@ function lessonView() {
   const unit = LEARNING_UNITS.find((item)=>item.id===state.currentLesson) || LEARNING_UNITS[0];
   const progress = state.mastery?.[unit.id] || 'not_started';
   const progressLabel = ({not_started:'ยังไม่เริ่ม',understood:'เข้าใจแล้ว',action_taken:'ลงมือแล้ว',evidence_recorded:'บันทึกหลักฐานแล้ว · ผู้ใช้รายงาน'})[progress];
-  return `<article class="lesson-detail"><span class="eyebrow">บทเรียน · ${unit.duration_minutes} นาที · ${progressLabel}</span><h1>${escapeHtml(unit.decision)}</h1>
-    <section class="decision-card"><span class="eyebrow">การตัดสินใจ</span><p>${escapeHtml(unit.decision)}</p></section>
+  const title = unit.title || unit.decision;
+  const lessonBody = unit.sections?.length ? `<section class="lesson-summary"><p>${escapeHtml(unit.summary)}</p></section><div class="lesson-sections">${unit.sections.map((section)=>`<section><h2>${escapeHtml(section.title)}</h2><p>${escapeHtml(section.body)}</p></section>`).join('')}</div>` : `<section class="decision-card"><span class="eyebrow">การตัดสินใจ</span><p>${escapeHtml(unit.decision)}</p></section>`;
+  const infographicBody = unit.infographics?.length ? `<section class="infographic-section"><span class="eyebrow">INFOGRAPHIC</span><h2>ดูภาพ แล้วกลับมาเช็กความเข้าใจ</h2><div class="infographic-gallery">${unit.infographics.map((graphic)=>`<figure><img src="${escapeHtml(graphic.src)}" alt="${escapeHtml(graphic.alt)}" loading="lazy"><figcaption>${escapeHtml(graphic.caption)}</figcaption></figure>`).join('')}</div></section>` : '';
+  const evidenceHint = unit.evidence_hint || 'เช่น เลขรับเรื่อง วันที่นัด หรือชื่อเอกสาร—ห้ามใส่ OTP';
+  const evidencePlaceholder = unit.evidence_placeholder || 'เลขรับเรื่อง / วันนัด / เอกสารที่ได้รับ';
+  const disclaimer = unit.sections?.length ? 'เนื้อหานี้เป็นความรู้ทั่วไป ตัวเลขภาษี ผลตอบแทน และเงื่อนไขผลิตภัณฑ์อาจเปลี่ยนได้ ควรตรวจแหล่งข้อมูลทางการก่อนตัดสินใจจริง' : 'เนื้อหานี้ช่วยเตรียมข้อมูลและคำถาม ไม่รับรองสิทธิ์ ผลการเจรจา หรือผลคดี';
+  return `<article class="lesson-detail"><span class="eyebrow">บทเรียน · ${unit.duration_minutes} นาที · ${progressLabel}</span><h1>${escapeHtml(title)}</h1>
+    ${lessonBody}
+    ${infographicBody}
     <section class="knowledge-check"><span class="eyebrow">เช็กความเข้าใจ 1 ข้อ</span><h2>${escapeHtml(unit.question)}</h2>${state.lessonAnswerRevealed?`<div class="answer-box"><b>คำตอบ</b><p>${escapeHtml(unit.answer)}</p></div>`:`<button class="secondary" data-action="reveal-answer">ดูคำตอบ</button>`}</section>
-    <section><span class="eyebrow">ทำตอนนี้</span><h2>${escapeHtml(unit.action.label)}</h2><button class="secondary" data-action="start-lesson-action">ฉันเริ่มทำงานนี้แล้ว</button><label class="input-card" for="lessonEvidence"><span>หลักฐานผลลัพธ์</span><small>เช่น เลขรับเรื่อง วันที่นัด หรือชื่อเอกสาร—ห้ามใส่ OTP</small><input id="lessonEvidence" value="${escapeHtml(state.lessonEvidence)}" placeholder="เลขรับเรื่อง / วันนัด / เอกสารที่ได้รับ"></label></section>
+    <section><span class="eyebrow">ทำตอนนี้</span><h2>${escapeHtml(unit.action.label)}</h2><button class="secondary" data-action="start-lesson-action">ฉันเริ่มทำงานนี้แล้ว</button><label class="input-card" for="lessonEvidence"><span>หลักฐานผลลัพธ์</span><small>${escapeHtml(evidenceHint)}</small><input id="lessonEvidence" value="${escapeHtml(state.lessonEvidence)}" placeholder="${escapeHtml(evidencePlaceholder)}"></label></section>
     <div class="lesson-source"><span>แหล่งข้อมูล</span><a href="${unit.source.url}" target="_blank" rel="noreferrer">${escapeHtml(unit.source.owner)} ↗</a><small>ทบทวน ${escapeHtml(unit.source.reviewed_date)}</small></div>
     <button class="primary" data-action="complete-lesson" ${state.lessonEvidence.trim()?'':'disabled'}>${progress==='evidence_recorded'?'บันทึกหลักฐานแล้ว ✓':'บันทึกหลักฐานที่รายงาน'} <span>→</span></button>
-    <p class="disclaimer">เนื้อหานี้ช่วยเตรียมข้อมูลและคำถาม ไม่รับรองสิทธิ์ ผลการเจรจา หรือผลคดี</p>
+    <p class="disclaimer">${escapeHtml(disclaimer)}</p>
   </article>`;
 }
 
