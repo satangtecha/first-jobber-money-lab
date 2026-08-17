@@ -3,15 +3,18 @@ import { routeDebt, cashBeforeDebt, ROUTES, DEBT_ENGINE_VERSION } from './debt-e
 import { comparePayoffScenarios, PayoffEngineError } from './payoff-engine.js';
 import { LEARNING_UNITS, unitsForRoute } from './learning-content.js';
 import { COURSES, PASSING_SCORE, courseById, courseStats, isUnitUnlocked, unitById } from './curriculum.js';
+import { calculateThaiPIT2026, TaxLabError } from './tax-lab.js';
+import { advanceInvestmentSimulation, ALLOCATION_PRESETS, ASSETS, MARKET_SCENARIOS, startInvestmentSimulation, summarizeInvestmentSimulation, InvestmentSimError } from './investment-sim.js';
 import { createDebtAction, createDebtAssessment, deleteDebtAssessment, getSessionUser, listDebtAssessments, requestMagicLink } from './api-client.js';
 
 const STORE_KEY = 'first-jobber-debt-navigator-v1';
-const APP_SCHEMA_VERSION = 5;
-const SENSITIVE_SCREENS = new Set(['intake-money', 'intake-status', 'intake-details', 'diagnosis', 'action-plan', 'portfolio', 'debt-editor', 'payoff', 'reminders', 'learn', 'course', 'course-lesson', 'course-quiz', 'lesson', 'history']);
+const APP_SCHEMA_VERSION = 6;
+const SENSITIVE_SCREENS = new Set(['intake-money', 'intake-status', 'intake-details', 'diagnosis', 'action-plan', 'portfolio', 'debt-editor', 'payoff', 'reminders', 'tax-lab', 'invest-sim', 'learn', 'course', 'course-lesson', 'course-quiz', 'lesson', 'history']);
 const app = document.querySelector('#app');
 const today = () => new Intl.DateTimeFormat('en-CA', {
   timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit'
 }).format(new Date());
+const remainingTaxMonths = () => Math.max(1, 12 - Number(today().slice(5, 7)));
 
 const emptyDebtDraft = () => ({ creditorName: '', debtType: 'credit_card', balance: '', aprPercent: '', minimum: '', dueDay: '', status: 'current' });
 const emptyReminderDraft = () => ({ title: '', dueDate: '' });
@@ -38,6 +41,13 @@ const initialState = () => ({
   quizAnswers: {},
   quizSubmitted: false,
   curriculumProgress: {},
+  taxLab: {
+    monthlySalary: '30000', salaryMonths: '12', bonus: '', otherNetIncome: '', withholding: '',
+    socialSecurity: '10500', providentFund: '', otherAllowances: '', monthsRemaining: String(remainingTaxMonths()), calculated: false
+  },
+  investmentSetup: { starting: '100000', goal: '110000', riskTolerance: '10', preset: 'balanced' },
+  investmentGame: null,
+  investmentDecision: 'balanced',
   debts: [],
   intakeDebtId: null,
   debtDraft: emptyDebtDraft(),
@@ -119,6 +129,12 @@ const load = () => {
       loaded.quizSubmitted = false;
       loaded.curriculumProgress = {};
     }
+    if (priorVersion < 6) {
+      loaded.taxLab = fresh.taxLab;
+      loaded.investmentSetup = fresh.investmentSetup;
+      loaded.investmentGame = null;
+      loaded.investmentDecision = 'balanced';
+    }
     loaded.input.legalStage = effectiveLegalStage(loaded.input.legalStages);
     if (!loaded.input.creditorChoice && loaded.input.creditorName) {
       loaded.input.creditorChoice = 'other';
@@ -130,6 +146,9 @@ const load = () => {
     loaded.curriculumProgress = loaded.curriculumProgress && typeof loaded.curriculumProgress === 'object' ? loaded.curriculumProgress : {};
     loaded.practiceAnswers = loaded.practiceAnswers && typeof loaded.practiceAnswers === 'object' ? loaded.practiceAnswers : {};
     loaded.quizAnswers = loaded.quizAnswers && typeof loaded.quizAnswers === 'object' ? loaded.quizAnswers : {};
+    loaded.taxLab = { ...fresh.taxLab, ...(loaded.taxLab || {}) };
+    loaded.investmentSetup = { ...fresh.investmentSetup, ...(loaded.investmentSetup || {}) };
+    loaded.investmentDecision = ALLOCATION_PRESETS[loaded.investmentDecision] ? loaded.investmentDecision : 'balanced';
     if (!loaded.consent && SENSITIVE_SCREENS.has(loaded.screen)) loaded.screen = 'consent';
     return loaded;
   } catch {
@@ -481,7 +500,7 @@ function bottomNav() {
     ['learn', state.consent ? 'learn' : 'consent', '▤', 'เรียน'],
     ['history', state.consent ? 'history' : 'consent', '↗', 'ประวัติ']
   ];
-  const learningScreens = new Set(['learn', 'course', 'course-lesson', 'course-quiz', 'lesson']);
+  const learningScreens = new Set(['learn', 'course', 'course-lesson', 'course-quiz', 'lesson', 'tax-lab', 'invest-sim']);
   return `<nav class="bottom-nav" aria-label="เมนูหลัก">${items.map(([key, screen, icon, label]) =>
     `<button class="nav-item ${(state.screen === key || (key === 'learn' && learningScreens.has(state.screen))) ? 'active' : ''}" data-screen="${screen}"><span>${icon}</span>${label}</button>`
   ).join('')}</nav>`;
@@ -493,30 +512,90 @@ function homeView() {
   const meta = ready ? ROUTE_META[assessment.result.route] : null;
   const portfolioTotal = reportedDebtTotal();
   const total = portfolioTotal > 0n ? formatBaht(portfolioTotal) : state.input.totalDebt ? formatBaht(parseBaht(state.input.totalDebt)) : '—';
-  return `<section class="new-hero">
-    <div><span class="eyebrow">FIRST JOBBER DEBT NAVIGATOR</span>
-      <h1>รู้ว่าเคสคุณต้องทำอะไรต่อ</h1>
-      <p>เช็กเส้นทาง เตรียมคำพูด และเก็บหลักฐานให้จบในที่เดียว</p>
-      <button class="primary hero-cta" data-screen="consent">${ready ? 'อัปเดตข้อมูลเคส' : 'เช็กเคสของฉัน'} <span>→</span></button>
-    </div>${cockpitIllustration()}
+  let taxStatus = 'ยังไม่ได้ประมาณการ';
+  if (state.taxLab.calculated) {
+    try { const tax = currentTaxEstimate(); taxStatus = tax.reconciliation_satang > 0n ? `คาดว่าต้องเตรียม ${formatBaht(tax.reconciliation_satang)}` : `คาดว่าเครดิตเหลือ ${formatBaht(-tax.reconciliation_satang)}`; } catch { taxStatus = 'ข้อมูลภาษีต้องตรวจใหม่'; }
+  }
+  const game = state.investmentGame;
+  return `<section class="money-home-hero"><div><span class="eyebrow">FIRST JOBBER MONEY LAB</span><h1>ลองตัดสินใจก่อนใช้เงินจริง</h1><p>เรียนภาษี ลงทุน และจัดการหนี้ผ่านเครื่องมือจำลองที่อธิบายว่าตัวเลขเปลี่ยนเพราะอะไร</p><button class="primary hero-cta" data-screen="learn">เปิดแผนการเรียน <span>→</span></button></div><div class="money-orbit" aria-hidden="true"><i>฿</i><i>↗</i><i>≋</i><strong>F</strong></div></section>
+  <section class="money-tools-grid">
+    <article class="money-tool-card tax"><span class="tool-number">01</span><div class="tool-icon">฿</div><span class="eyebrow">TAX YEAR LAB</span><h2>เห็นภาษีทั้งปีก่อนยื่น</h2><p>คำนวณแบบขั้นบันได กระทบยอดภาษีที่ถูกหัก และแบ่งเงินที่ต้องกันต่อเดือน</p><strong>${escapeHtml(taxStatus)}</strong><button class="secondary" data-screen="tax-lab">เปิด Tax Lab →</button></article>
+    <article class="money-tool-card investing"><span class="tool-number">02</span><div class="tool-icon">↗</div><span class="eyebrow">MARKET SIMULATOR</span><h2>บริหารพอร์ตผ่าน 12 เหตุการณ์</h2><p>เลือกสัดส่วน รับ shock วัด drawdown และฝึก rebalance ด้วยเงินเสมือน</p><strong>${game ? `เล่นถึงเดือน ${game.round}/12` : 'ยังไม่เริ่มสถานการณ์จำลอง'}</strong><button class="secondary" data-screen="invest-sim">เปิด Simulator →</button></article>
+    <article class="money-tool-card debt"><span class="tool-number">03</span><div class="tool-icon">≋</div><span class="eyebrow">DEBT NAVIGATOR</span><h2>รู้ทางแก้หนี้ตามสถานะจริง</h2><p>${meta ? escapeHtml(meta.title) : 'คัด route เตรียมคำพูด และเก็บหลักฐานการติดต่อเจ้าหนี้'}</p><strong>ยอดที่รายงาน ${total}</strong><button class="secondary" data-screen="${meta ? 'diagnosis' : 'consent'}">${meta ? 'ดู Action Pack' : 'เริ่ม Route Check'} →</button></article>
   </section>
-  <section class="dashboard-grid">
-    <article class="debt-total-card"><span class="eyebrow">ยอดที่คุณรายงาน</span><strong>${total}</strong>
-      <div class="mini-debt-map" aria-label="ภาพรวมยอดหนี้"><i></i><i></i><i></i><i></i></div>
-      <small>${state.debts.length ? `${state.debts.length} บัญชี · ` : ''}แก้ไขได้ตลอด · ไม่ใช่ข้อมูลเครดิตบูโร</small>
-    </article>
-    <article class="next-action-card ${meta?.tone || ''}">
-      <span class="eyebrow">ทำต่อวันนี้</span>
-      <h2>${meta ? escapeHtml(meta.title) : 'เริ่ม Route Check 7 ข้อ'}</h2>
-      <p>${meta ? escapeHtml(meta.metric) : 'ใช้เวลาประมาณ 5–8 นาที'}</p>
-      <button class="text-action" data-screen="${meta ? 'diagnosis' : 'consent'}">${meta ? 'ดู Action Pack' : 'เริ่มเลย'} →</button>
-    </article>
+  <section class="home-learning-strip"><div><span>เรียน</span><b>เข้าใจหลักการตาม Level 0–5</b></div><i>→</i><div><span>ทดลอง</span><b>ตัดสินใจใน Tax Lab และ Simulator</b></div><i>→</i><div><span>ทบทวน</span><b>ดูผล วัดความเสี่ยง แล้วลองใหม่</b></div></section>`;
+}
+
+const taxMoney = (value) => String(value ?? '').trim() ? parseBaht(value) : 0n;
+function currentTaxEstimate() {
+  const t = state.taxLab;
+  return calculateThaiPIT2026({
+    monthly_salary_satang: taxMoney(t.monthlySalary), salary_months: Number(t.salaryMonths),
+    months_remaining: Number(t.monthsRemaining), bonus_satang: taxMoney(t.bonus),
+    other_net_income_satang: taxMoney(t.otherNetIncome), withholding_satang: taxMoney(t.withholding),
+    social_security_satang: taxMoney(t.socialSecurity), provident_fund_satang: taxMoney(t.providentFund),
+    other_allowances_satang: taxMoney(t.otherAllowances)
+  });
+}
+
+function taxField(name, label, hint, options = {}) {
+  const value = state.taxLab[name] ?? '';
+  const type = options.type || 'text';
+  return `<label class="lab-field" for="tax_${name}"><span>${escapeHtml(label)}</span>${hint ? `<small>${escapeHtml(hint)}</small>` : ''}<input id="tax_${name}" type="${type}" inputmode="${type === 'number' ? 'numeric' : 'decimal'}" min="${options.min ?? 0}" max="${options.max ?? ''}" value="${escapeHtml(value)}" placeholder="${escapeHtml(options.placeholder || '0')}"></label>`;
+}
+
+function taxLabView() {
+  let result = null;
+  let error = null;
+  if (state.taxLab.calculated) {
+    try { result = currentTaxEstimate(); } catch (caught) { error = caught; }
+  }
+  const reconciliation = result?.reconciliation_satang || 0n;
+  const outcome = reconciliation > 0n ? 'pay' : reconciliation < 0n ? 'refund' : 'even';
+  return `<section class="lab-hero tax"><div><button class="breadcrumb" data-screen="home">← หน้าหลัก</button><span class="eyebrow">TAX YEAR LAB · ปีภาษี 2569</span><h1>ปลายปีต้องเตรียมเงินเท่าไร</h1><p>ประมาณการจากเงินเดือน รายได้อื่นสุทธิ และสิทธิที่คุณยืนยันเอง ระบบแสดงวิธีคำนวณทุกขั้น</p></div><div class="lab-hero-icon">฿</div></section>
+  <div class="tax-lab-layout"><section class="lab-form"><div class="section-heading"><div><span class="eyebrow">INPUT</span><h2>ข้อเท็จจริงทั้งปี</h2></div><span class="privacy-chip">เก็บในอุปกรณ์</span></div>
+    <div class="lab-form-grid">${taxField('monthlySalary','เงินเดือนก่อนหักต่อเดือน','รวมค่าจ้างประจำก่อนหักภาษี',{placeholder:'30,000'})}${taxField('salaryMonths','ได้รับเงินเดือนกี่เดือน','0–12 เดือน',{type:'number',min:0,max:12})}${taxField('bonus','โบนัสทั้งปี','ถ้ายังไม่รู้ใช้ประมาณการที่สมเหตุผล',{placeholder:'50,000'})}${taxField('otherNetIncome','รายได้อื่น “หลังหักค่าใช้จ่ายตามประเภทแล้ว”','เช่น งานเสริม—ห้ามเดาค่าใช้จ่ายถ้ายังจำแนกประเภทไม่ได้',{placeholder:'20,000'})}${taxField('withholding','ภาษีที่ถูกหักไว้แล้ว','รวมจากสลิปและหนังสือรับรอง 50 ทวิ',{placeholder:'5,000'})}${taxField('socialSecurity','ประกันสังคมที่จ่ายจริง','ตรวจยอดจากสลิป ไม่ใช้เพดานอัตโนมัติ',{placeholder:'10,500'})}${taxField('providentFund','เงินสะสม PVD ที่มีสิทธิ','เฉพาะส่วนที่คุณจ่ายและตรวจเงื่อนไขแล้ว',{placeholder:'18,000'})}${taxField('otherAllowances','ค่าลดหย่อนอื่นที่ตรวจสิทธิ์แล้ว','ไม่รวมค่าลดหย่อนส่วนตัว 60,000 ที่ระบบใส่ให้',{placeholder:'0'})}${taxField('monthsRemaining','เหลือกี่เดือนให้กันเงิน','อย่างน้อย 1 เดือน',{type:'number',min:1,max:12})}</div>
+    <button class="primary tax-calculate" data-action="calculate-tax">คำนวณและอธิบายผล <span>→</span></button><p class="lab-safety">ไม่ใช้แทนแบบ ภ.ง.ด.90/91 และไม่ครอบคลุมการจำแนกเงินได้ ธุรกิจ ต่างประเทศ เครดิตเงินปันผล หรือสิทธิซับซ้อน</p>
   </section>
-  <section class="feature-ribbon">
-    <div><span>01</span><b>รู้ route</b><small>ก่อนค้าง / NPL / ศาล / dispute</small></div>
-    <div><span>02</span><b>มี script</b><small>ตัวเลขพร้อมใช้คุยเจ้าหนี้</small></div>
-    <div><span>03</span><b>เก็บผล</b><small>เลขรับเรื่อง ข้อเสนอ และวันนัด</small></div>
-  </section>`;
+  <section class="tax-result-host">${error ? `<div class="lab-error"><b>ยังคำนวณไม่ได้</b><p>${escapeHtml(error.message)}</p></div>` : result ? `<div class="tax-outcome ${outcome}"><span class="eyebrow">ESTIMATED RECONCILIATION</span><small>ภาษีประมาณการ − ภาษีที่ถูกหักไว้</small><strong>${reconciliation > 0n ? formatBaht(reconciliation) : reconciliation < 0n ? formatBaht(-reconciliation) : '0.00 บาท'}</strong><b>${outcome === 'pay' ? 'ยอดที่ควรเตรียมเพิ่ม' : outcome === 'refund' ? 'เครดิตภาษีอาจเหลือสำหรับขอคืน' : 'ประมาณการเท่ากับยอดที่ถูกหักไว้'}</b>${outcome === 'pay' ? `<div class="reserve-callout"><span>ถ้าแบ่งใน ${state.taxLab.monthsRemaining} เดือน</span><strong>${formatBaht(result.reserve_per_month_satang)}/เดือน</strong></div>` : ''}</div>
+    <div class="tax-waterfall"><span class="eyebrow">CALCULATION MAP</span>${[['รายได้ทั้งปี',result.total_income_satang],['หักค่าใช้จ่ายเงินเดือน',-result.employment_expense_satang],['หักค่าลดหย่อนรวม',-result.total_allowances_satang],['เงินได้สุทธิ',result.taxable_income_satang],['ภาษีประมาณการ',result.estimated_tax_satang]].map(([label,value],index)=>`<div class="${index===4?'final':''}"><span>${escapeHtml(label)}</span><i></i><b>${value < 0n ? '− ' : ''}${formatBaht(value < 0n ? -value : value)}</b></div>`).join('')}</div>
+    <section class="tax-brackets"><div class="section-heading"><div><span class="eyebrow">PROGRESSIVE TAX</span><h2>เงินของคุณอยู่ในขั้นไหน</h2></div><strong>${(result.marginal_rate_bps/100).toFixed(0)}% marginal</strong></div>${result.bracket_breakdown.map((row)=>`<div><span>${row.rate_bps/100}%</span><div><i style="width:${Math.min(100,Number(row.taxable_portion_satang)*100/Math.max(1,Number(result.taxable_income_satang)))}%"></i></div><b>${formatBaht(row.tax_satang)}</b></div>`).join('')}<small>อัตราสูงสุดใช้เฉพาะเงินส่วนที่อยู่ในช่วงนั้น ไม่ได้คูณรายได้ทั้งหมด</small></section>
+    <div class="tax-next-actions"><div><span>แบบที่น่าจะเกี่ยวข้อง</span><b>${escapeHtml(result.likely_form)}</b></div><div><span>ทำต่อ</span><b>กระทบยอดกับ 50 ทวิและเอกสารจริงก่อนยื่น</b></div></div>
+    <div class="lab-action-row"><button class="secondary" data-action="save-tax-snapshot">บันทึกประมาณการ</button><button class="primary" data-action="open-course" data-course="tax">เรียนภาษีตามลำดับ <span>→</span></button></div>` : `<div class="empty-lab-result"><div>฿</div><h2>ผลลัพธ์จะไม่ได้มีแค่ยอดภาษี</h2><p>คุณจะเห็นที่มาของเงินได้สุทธิ ภาษีแต่ละขั้น จ่ายเพิ่ม/เครดิตเหลือ และจำนวนที่ควรกันต่อเดือน</p><ol><li>กรอกข้อเท็จจริงทั้งปี</li><li>กดคำนวณ</li><li>กลับไปแก้สมมติฐานได้ตลอด</li></ol></div>`}</section></div>
+  <section class="lab-sources"><span>หลักคำนวณ</span><a href="https://www.rd.go.th/59668.html" target="_blank" rel="noreferrer">กรมสรรพากร: ค่าใช้จ่ายและค่าลดหย่อน ↗</a><a href="https://www.rd.go.th/5938.html" target="_blank" rel="noreferrer">กรมสรรพากร: บัญชีอัตราภาษี ↗</a><small>ตรวจ 17 ส.ค. 2569 · กติกาอาจเปลี่ยน ควรตรวจปีภาษีจริงก่อนยื่น</small></section>`;
+}
+
+const allocationLabels = { defensive: 'ตั้งรับ', balanced: 'สมดุล', growth: 'เติบโต' };
+function gameTotal(game) { return ASSETS.reduce((sum, asset) => sum + BigInt(game.holdings[asset]), 0n); }
+function percentLabel(bps) { return `${bps >= 0 ? '+' : '−'}${(Math.abs(bps) / 100).toFixed(1)}%`; }
+function allocationBars(allocation) {
+  return `<div class="allocation-bars" aria-label="เงินสด ${allocation.cash}% ตราสารหนี้ ${allocation.bonds}% หุ้น ${allocation.stocks}%"><i class="cash" style="width:${allocation.cash}%"></i><i class="bonds" style="width:${allocation.bonds}%"></i><i class="stocks" style="width:${allocation.stocks}%"></i></div><div class="allocation-legend"><span><i class="cash"></i>เงินสด ${allocation.cash}%</span><span><i class="bonds"></i>ตราสารหนี้ ${allocation.bonds}%</span><span><i class="stocks"></i>หุ้น ${allocation.stocks}%</span></div>`;
+}
+function investmentChart(game) {
+  const values = [BigInt(game.starting_satang), ...(game.history || []).map((item)=>BigInt(item.after_satang))];
+  const numbers = values.map(Number); const min = Math.min(...numbers); const max = Math.max(...numbers); const range = Math.max(1,max-min);
+  const points = numbers.map((value,index)=>`${20+index*(320/Math.max(1,numbers.length-1))},${110-(value-min)*80/range}`).join(' ');
+  return `<svg class="investment-chart" viewBox="0 0 360 130" role="img" aria-label="มูลค่าพอร์ตตั้งแต่เริ่มถึงเดือน ${game.round}"><path d="M20 110H340"/><polyline points="${points}"/><circle cx="${20+(numbers.length-1)*(320/Math.max(1,numbers.length-1))}" cy="${110-(numbers.at(-1)-min)*80/range}" r="5"/></svg>`;
+}
+function presetCards(selected) {
+  return Object.entries(ALLOCATION_PRESETS).map(([key,allocation])=>`<button class="allocation-choice ${selected===key?'selected':''}" data-action="select-investment-allocation" data-preset="${key}"><b>${allocationLabels[key]}</b><span>เงินสด ${allocation.cash} · ตราสารหนี้ ${allocation.bonds} · หุ้น ${allocation.stocks}</span>${allocationBars(allocation)}</button>`).join('');
+}
+function investmentSimView() {
+  const game = state.investmentGame;
+  if (!game) return `<section class="lab-hero investing"><div><button class="breadcrumb" data-screen="home">← หน้าหลัก</button><span class="eyebrow">MARKET SIMULATOR · เงินเสมือน</span><h1>ถ้าตลาดไม่เป็นอย่างที่คิด คุณยังทำตามแผนได้ไหม</h1><p>ทดลอง 12 เดือนที่มีทั้งตลาดขึ้น ลง เงินเฟ้อ ดอกเบี้ย และ recession เป้าหมายคือบริหารความเสี่ยง ไม่ใช่ทำคะแนนกำไรสูงสุด</p></div><div class="lab-hero-icon">↗</div></section>
+    <div class="investment-setup"><section><span class="eyebrow">MISSION SETUP</span><h2>ตั้งภารกิจก่อนเห็นเหตุการณ์</h2><div class="lab-form-grid"><label class="lab-field"><span>เงินเริ่มต้นเสมือน</span><small>ไม่มีการเชื่อมบัญชีเงินจริง</small><input id="invest_starting" inputmode="decimal" value="${escapeHtml(state.investmentSetup.starting)}"></label><label class="lab-field"><span>เป้าหมายปลาย 12 เดือน</span><small>ใช้วัดกับแผน ไม่ใช่รับประกันผลตอบแทน</small><input id="invest_goal" inputmode="decimal" value="${escapeHtml(state.investmentSetup.goal)}"></label><label class="lab-field"><span>ขาดทุนจากจุดสูงสุดที่รับได้</span><small>ถ้าเกิน ระบบจะแจ้งว่าแผนไม่ตรงความเสี่ยง</small><input id="invest_riskTolerance" type="number" min="1" max="80" value="${escapeHtml(state.investmentSetup.riskTolerance)}"><em>%</em></label></div></section>
+    <section><span class="eyebrow">STARTING PORTFOLIO</span><h2>เลือกสัดส่วนเริ่มต้น</h2><div class="allocation-choice-grid">${presetCards(state.investmentSetup.preset)}</div><button class="primary" data-action="start-investment-sim">เริ่มเดือนที่ 1 <span>→</span></button><p class="lab-safety">สถานการณ์และผลตอบแทนทั้งหมดถูกสร้างเพื่อการเรียน ไม่ใช่ข้อมูลตลาดจริง การคาดการณ์ หรือคำแนะนำลงทุน</p></section></div>`;
+  const summary = summarizeInvestmentSimulation(game);
+  if (game.completed) {
+    const riskLimit = Number(state.investmentSetup.riskTolerance || 0) * 100;
+    return `<section class="simulation-finish"><span class="eyebrow">12-MONTH REVIEW</span><h1>คุณรอดครบหนึ่งวงจรตลาดแล้ว</h1><div class="finish-score-grid"><div><span>มูลค่าสุดท้าย</span><strong>${formatBaht(summary.final_value_satang)}</strong><small>${percentLabel(summary.total_return_bps)} จากเงินเริ่มต้น</small></div><div><span>Maximum drawdown</span><strong>${(summary.max_drawdown_bps/100).toFixed(1)}%</strong><small>${summary.max_drawdown_bps > riskLimit ? 'สูงกว่าที่คุณบอกว่ารับได้' : 'อยู่ในกรอบที่ตั้งไว้'}</small></div><div><span>เป้าหมาย</span><strong>${summary.goal_met?'ถึง':'ยังไม่ถึง'}</strong><small>เป้าหมาย ${formatBaht(BigInt(game.goal_satang))}</small></div></div>${investmentChart(game)}<section class="reflection-card"><h2>คำถามหลังเกม</h2><ol><li>เดือนไหนทำให้คุณอยากเปลี่ยนแผนมากที่สุด</li><li>การเปลี่ยนสัดส่วนเกิดจากกฎหรือจากผลเดือนก่อน</li><li>ถ้าเป็นเงินจริง เงินฉุกเฉินพอให้ไม่ต้องขายหรือไม่</li></ol></section><div class="lab-action-row"><button class="secondary" data-action="save-investment-result">บันทึกผลการทดลอง</button><button class="secondary" data-action="reset-investment-sim">เริ่มเกมใหม่</button><button class="primary" data-action="open-course" data-course="investing">เรียนหลักการลงทุน <span>→</span></button></div><p class="lab-safety">ผลเกมไม่ใช้ประเมินว่าควรซื้อสินทรัพย์ใด และไม่คาดการณ์ผลตอบแทนในอนาคต</p></section>`;
+  }
+  const scenario = MARKET_SCENARIOS[game.round];
+  const last = game.history.at(-1);
+  const currentTotal = gameTotal(game);
+  const riskLimit = Number(state.investmentSetup.riskTolerance || 0) * 100;
+  return `<section class="sim-header"><div><button class="breadcrumb" data-screen="home">← หน้าหลัก</button><span class="eyebrow">MARKET SIMULATOR · เดือน ${game.round + 1}/12</span><h1>${escapeHtml(scenario.title)}</h1><p>${escapeHtml(scenario.signal)}</p></div><div class="sim-value"><span>พอร์ตปัจจุบัน</span><strong>${formatBaht(currentTotal)}</strong><small>เงินเสมือน · สูงสุด ${formatBaht(BigInt(game.peak_satang))}</small></div></section>
+  <div class="simulation-layout"><section><section class="market-event"><span class="event-pulse"></span><div><span class="eyebrow">NEW MARKET EVENT</span><h2>คุณจะจัดพอร์ตก่อนดูผลเดือนนี้อย่างไร</h2><p>ผลตอบแทนของแต่ละสินทรัพย์ยังถูกซ่อนไว้ เลือกจากเป้าหมายและ risk budget ไม่ใช่เดาตัวเลข</p></div></section><div class="allocation-choice-grid play">${presetCards(state.investmentDecision)}</div><button class="primary simulate-button" data-action="advance-investment-sim">ยืนยันสัดส่วนและดูผลเดือน ${game.round + 1} <span>→</span></button>${last ? `<section class="last-round"><div class="section-heading"><div><span class="eyebrow">เดือนก่อน · ${escapeHtml(last.title)}</span><h2>${percentLabel(last.change_bps)} · ${formatBaht(BigInt(last.after_satang))}</h2></div><span class="${last.change_bps>=0?'gain':'loss'}">${last.change_bps>=0?'พอร์ตเพิ่ม':'พอร์ตลด'}</span></div><div class="asset-return-grid">${ASSETS.map((asset)=>`<div><span>${({cash:'เงินสด',bonds:'ตราสารหนี้',stocks:'หุ้น'})[asset]}</span><b>${percentLabel(last.returns_bps[asset])}</b></div>`).join('')}</div><p>${escapeHtml(last.lesson)}</p></section>` : ''}</section><aside><section class="portfolio-monitor"><span class="eyebrow">PORTFOLIO MONITOR</span>${investmentChart(game)}${allocationBars(game.allocation)}<div class="monitor-stats"><div><span>ผลรวม</span><b>${percentLabel(summary.total_return_bps)}</b></div><div><span>Drawdown สูงสุด</span><b class="${summary.max_drawdown_bps>riskLimit?'over-risk':''}">${(summary.max_drawdown_bps/100).toFixed(1)}%</b></div><div><span>กรอบของคุณ</span><b>${state.investmentSetup.riskTolerance}%</b></div></div></section><section class="sim-rule"><b>กติกาเดือนนี้</b><p>คุณเปลี่ยนสัดส่วนได้ แต่ไม่มีสินทรัพย์ใดรับประกันกำไร และการเห็นข่าวไม่ได้ทำให้รู้ผลตอบแทนล่วงหน้า</p></section></aside></div>`;
 }
 
 function consentView() {
@@ -862,7 +941,7 @@ function learnView() {
       <div class="course-cover"><img src="${courseGraphic(course.id)}" alt="" loading="lazy"><span class="course-symbol">${course.icon}</span></div>
       <div class="course-copy"><span class="eyebrow">หลักสูตร · ${course.units.length} ระดับ · ${stats.completed}/${stats.total} ผ่าน</span><h2>${escapeHtml(course.title)}</h2><p>${escapeHtml(course.description)}</p>
         <div class="level-dots" aria-label="ผ่าน ${stats.completed} จาก ${stats.total} ระดับ">${course.units.map((unit) => `<i class="${Number(curriculumRecord(unit.id).bestScore || 0) >= PASSING_SCORE ? 'done' : isUnitUnlocked(unit, state.curriculumProgress) ? 'open' : 'locked'}"></i>`).join('')}</div>
-        <button class="secondary" data-action="open-course" data-course="${course.id}">ดูแผนการเรียน <span>→</span></button><small>ระดับถัดไป: ${escapeHtml(next.title)}</small>
+        <div class="course-card-actions"><button class="secondary" data-action="open-course" data-course="${course.id}">ดูแผนการเรียน <span>→</span></button>${course.id === 'tax' ? '<button class="tool-shortcut" data-screen="tax-lab">เปิด Tax Lab</button>' : course.id === 'investing' ? '<button class="tool-shortcut" data-screen="invest-sim">เปิด Simulator</button>' : ''}</div><small>ระดับถัดไป: ${escapeHtml(next.title)}</small>
       </div>
     </article>`;
   }).join('')}</div>
@@ -1029,6 +1108,8 @@ function render() {
     'debt-editor': debtEditorView,
     payoff: payoffView,
     reminders: remindersView,
+    'tax-lab': taxLabView,
+    'invest-sim': investmentSimView,
     learn: learnView,
     course: courseView,
     'course-lesson': courseLessonView,
@@ -1096,6 +1177,11 @@ app.addEventListener('input', (event) => {
     if (completeButton) completeButton.disabled = !target.value.trim();
   }
   else if (target.id === 'authEmail') { authEmailDraft = target.value; return; }
+  else if (target.id.startsWith('tax_')) {
+    state.taxLab[target.id.replace('tax_','')] = target.value;
+    state.taxLab.calculated = false;
+  }
+  else if (target.id.startsWith('invest_')) state.investmentSetup[target.id.replace('invest_','')] = target.value;
   else if (target.id.startsWith('debtDraft_')) state.debtDraft[target.id.replace('debtDraft_','')] = target.value;
   else if (target.id.startsWith('reminderDraft_')) state.reminderDraft[target.id.replace('reminderDraft_','')] = target.value;
   else if (target.id === 'extraPayment' || target.id === 'restructureDebtId' || target.id === 'restructureApr' || target.id === 'restructurePayment') state[target.id] = target.value;
@@ -1193,7 +1279,7 @@ app.addEventListener('click', async (event) => {
       consent:'home','intake-money':'consent','intake-status':'intake-money',
       'intake-details':'intake-status',diagnosis:'intake-details','action-plan':'diagnosis',
       portfolio:'home','debt-editor':'portfolio',payoff:'portfolio',reminders:'portfolio',
-      learn:'home',course:'learn','course-lesson':'course','course-quiz':'course-lesson',lesson:'learn',history:'home',data:'home','delete-confirm':'data'
+      'tax-lab':'home','invest-sim':'home',learn:'home',course:'learn','course-lesson':'course','course-quiz':'course-lesson',lesson:'learn',history:'home',data:'home','delete-confirm':'data'
     };
     state.screen = back[state.screen] || 'home';
   }
@@ -1220,6 +1306,65 @@ app.addEventListener('click', async (event) => {
       state.notice = 'กรุณายืนยันสถานะหนี้ ขั้นกฎหมาย และเลือกประเภทหนี้อย่างน้อยหนึ่งข้อ';
     } else if (assessment.error) state.notice = assessment.error.message;
     else { syncDebtFromIntake(); state.assessmentSaved = null; state.clientAssessmentId = crypto.randomUUID(); state.remoteAssessmentId = null; state.screen = 'diagnosis'; state.notice = ''; trackPilot('route_completed',{route:assessment.result.route}); }
+  }
+  if (action === 'calculate-tax') {
+    try {
+      currentTaxEstimate();
+      state.taxLab.calculated = true;
+      state.notice = '';
+    } catch (error) {
+      state.taxLab.calculated = true;
+      state.notice = error instanceof TaxLabError || error instanceof RulesError ? error.message : 'ตรวจตัวเลขภาษีอีกครั้ง';
+    }
+  }
+  if (action === 'save-tax-snapshot') {
+    try {
+      const result = currentTaxEstimate();
+      const note = result.reconciliation_satang > 0n
+        ? `ประมาณการต้องเตรียมเพิ่ม ${formatBaht(result.reconciliation_satang)} · กัน ${formatBaht(result.reserve_per_month_satang)}/เดือน`
+        : `ประมาณการเครดิตภาษีเหลือ ${formatBaht(-result.reconciliation_satang)}`;
+      state.history.push({ date: today(), title: 'บันทึก Tax Year Lab', note });
+      state.notice = 'บันทึกประมาณการไว้ในประวัติแล้ว';
+    } catch (error) { state.notice = error.message || 'ยังบันทึกประมาณการไม่ได้'; }
+  }
+  if (action === 'select-investment-allocation') {
+    const preset = button.dataset.preset;
+    if (ALLOCATION_PRESETS[preset]) {
+      state.investmentDecision = preset;
+      if (!state.investmentGame) state.investmentSetup.preset = preset;
+    }
+  }
+  if (action === 'start-investment-sim') {
+    try {
+      const tolerance = Number(state.investmentSetup.riskTolerance);
+      if (!Number.isInteger(tolerance) || tolerance < 1 || tolerance > 80) throw new InvestmentSimError('INVALID_RISK','กรอบขาดทุนต้องอยู่ระหว่าง 1–80%');
+      const preset = state.investmentSetup.preset;
+      state.investmentGame = startInvestmentSimulation({
+        starting_satang: parseBaht(state.investmentSetup.starting).toString(),
+        goal_satang: parseBaht(state.investmentSetup.goal).toString(),
+        allocation: ALLOCATION_PRESETS[preset]
+      });
+      state.investmentDecision = preset;
+      state.notice = '';
+    } catch (error) { state.notice = error.message || 'ตรวจข้อมูลภารกิจลงทุน'; }
+  }
+  if (action === 'advance-investment-sim') {
+    try {
+      state.investmentGame = advanceInvestmentSimulation(state.investmentGame, ALLOCATION_PRESETS[state.investmentDecision]);
+      state.notice = state.investmentGame.completed ? 'จบสถานการณ์จำลอง 12 เดือนแล้ว' : '';
+    } catch (error) { state.notice = error.message || 'ยังจำลองเดือนถัดไปไม่ได้'; }
+  }
+  if (action === 'reset-investment-sim') {
+    state.investmentGame = null;
+    state.investmentDecision = state.investmentSetup.preset || 'balanced';
+    state.notice = 'เริ่มภารกิจใหม่ได้แล้ว';
+  }
+  if (action === 'save-investment-result') {
+    try {
+      const summary = summarizeInvestmentSimulation(state.investmentGame);
+      state.history.push({ date: today(), title: 'บันทึก Market Simulator', note: `จบ ${summary.rounds_completed}/12 เดือน · ผลรวม ${percentLabel(summary.total_return_bps)} · drawdown สูงสุด ${(summary.max_drawdown_bps/100).toFixed(1)}%` });
+      state.notice = 'บันทึกผลการทดลองไว้ในประวัติแล้ว';
+    } catch (error) { state.notice = error.message || 'ยังบันทึกผลไม่ได้'; }
   }
   if (action === 'open-course') {
     const course = courseById(button.dataset.course || state.selectedCourse);
