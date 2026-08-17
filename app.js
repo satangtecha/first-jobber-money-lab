@@ -1,12 +1,13 @@
 import { parseBaht, formatBaht, RulesError } from './rules.js';
 import { routeDebt, cashBeforeDebt, ROUTES, DEBT_ENGINE_VERSION } from './debt-engine.js';
 import { comparePayoffScenarios, PayoffEngineError } from './payoff-engine.js';
-import { DEBT_LEARNING_UNITS, LEARNING_UNITS, MONEY_LAB_UNITS, unitsForRoute } from './learning-content.js';
+import { LEARNING_UNITS, unitsForRoute } from './learning-content.js';
+import { COURSES, PASSING_SCORE, courseById, courseStats, isUnitUnlocked, unitById } from './curriculum.js';
 import { createDebtAction, createDebtAssessment, deleteDebtAssessment, getSessionUser, listDebtAssessments, requestMagicLink } from './api-client.js';
 
 const STORE_KEY = 'first-jobber-debt-navigator-v1';
-const APP_SCHEMA_VERSION = 4;
-const SENSITIVE_SCREENS = new Set(['intake-money', 'intake-status', 'intake-details', 'diagnosis', 'action-plan', 'portfolio', 'debt-editor', 'payoff', 'reminders', 'learn', 'lesson', 'history']);
+const APP_SCHEMA_VERSION = 5;
+const SENSITIVE_SCREENS = new Set(['intake-money', 'intake-status', 'intake-details', 'diagnosis', 'action-plan', 'portfolio', 'debt-editor', 'payoff', 'reminders', 'learn', 'course', 'course-lesson', 'course-quiz', 'lesson', 'history']);
 const app = document.querySelector('#app');
 const today = () => new Intl.DateTimeFormat('en-CA', {
   timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit'
@@ -30,6 +31,13 @@ const initialState = () => ({
   currentLesson: 0,
   lessonAnswerRevealed: false,
   lessonEvidence: '',
+  selectedCourse: 'tax',
+  currentUnitId: 'tax-l0',
+  lessonStep: 0,
+  practiceAnswers: {},
+  quizAnswers: {},
+  quizSubmitted: false,
+  curriculumProgress: {},
   debts: [],
   intakeDebtId: null,
   debtDraft: emptyDebtDraft(),
@@ -102,6 +110,15 @@ const load = () => {
     if (priorVersion < 4 || !Array.isArray(loaded.input.legalStages)) {
       loaded.input.legalStages = loaded.input.legalStage ? [loaded.input.legalStage] : [];
     }
+    if (priorVersion < 5) {
+      loaded.selectedCourse = 'tax';
+      loaded.currentUnitId = 'tax-l0';
+      loaded.lessonStep = 0;
+      loaded.practiceAnswers = {};
+      loaded.quizAnswers = {};
+      loaded.quizSubmitted = false;
+      loaded.curriculumProgress = {};
+    }
     loaded.input.legalStage = effectiveLegalStage(loaded.input.legalStages);
     if (!loaded.input.creditorChoice && loaded.input.creditorName) {
       loaded.input.creditorChoice = 'other';
@@ -110,6 +127,9 @@ const load = () => {
     loaded.debtDraft = { ...emptyDebtDraft(), ...(loaded.debtDraft || {}) };
     loaded.reminderDraft = { ...emptyReminderDraft(), ...(loaded.reminderDraft || {}) };
     loaded.mastery = Object.fromEntries(Object.entries(loaded.mastery || {}).map(([id,value])=>[id,['mastered','verified'].includes(value)?'evidence_recorded':value]));
+    loaded.curriculumProgress = loaded.curriculumProgress && typeof loaded.curriculumProgress === 'object' ? loaded.curriculumProgress : {};
+    loaded.practiceAnswers = loaded.practiceAnswers && typeof loaded.practiceAnswers === 'object' ? loaded.practiceAnswers : {};
+    loaded.quizAnswers = loaded.quizAnswers && typeof loaded.quizAnswers === 'object' ? loaded.quizAnswers : {};
     if (!loaded.consent && SENSITIVE_SCREENS.has(loaded.screen)) loaded.screen = 'consent';
     return loaded;
   } catch {
@@ -461,8 +481,9 @@ function bottomNav() {
     ['learn', state.consent ? 'learn' : 'consent', '▤', 'เรียน'],
     ['history', state.consent ? 'history' : 'consent', '↗', 'ประวัติ']
   ];
+  const learningScreens = new Set(['learn', 'course', 'course-lesson', 'course-quiz', 'lesson']);
   return `<nav class="bottom-nav" aria-label="เมนูหลัก">${items.map(([key, screen, icon, label]) =>
-    `<button class="nav-item ${state.screen === key ? 'active' : ''}" data-screen="${screen}"><span>${icon}</span>${label}</button>`
+    `<button class="nav-item ${(state.screen === key || (key === 'learn' && learningScreens.has(state.screen))) ? 'active' : ''}" data-screen="${screen}"><span>${icon}</span>${label}</button>`
   ).join('')}</nav>`;
 }
 
@@ -793,18 +814,126 @@ function actionPlanView() {
   </section>`;
 }
 
+const courseGraphic = (courseId) => ({
+  tax: './assets/lessons/tax-map.png',
+  investing: './assets/lessons/investing-risk-return.png',
+  debt: './assets/lessons/debt-triage.png'
+})[courseId];
+
+function curriculumRecord(unitId) {
+  return state.curriculumProgress?.[unitId] || { status: 'not_started', step: 0, bestScore: 0 };
+}
+
+function progressLabel(record) {
+  if (Number(record.bestScore || 0) >= PASSING_SCORE) return `ผ่านแล้ว · ${record.bestScore}/3`;
+  if (record.status === 'in_progress') return 'กำลังเรียน';
+  return 'ยังไม่เริ่ม';
+}
+
+function firstAvailableUnit(course) {
+  return course.units.find((unit) => isUnitUnlocked(unit, state.curriculumProgress) && Number(curriculumRecord(unit.id).bestScore || 0) < PASSING_SCORE) || course.units.at(-1);
+}
+
 function learnView() {
   const assessment = currentAssessment();
   const route = assessment.error ? ROUTES.PREVENTION : assessment.result.route;
   const contextual = unitsForRoute(route);
-  const units = [...contextual, ...DEBT_LEARNING_UNITS.filter((unit)=>!contextual.includes(unit))];
-  const moneyMastered = MONEY_LAB_UNITS.filter((unit)=>state.mastery?.[unit.id]==='evidence_recorded').length;
-  const label = (value) => ({not_started:'ยังไม่เริ่ม',understood:'เข้าใจแล้ว',action_taken:'ลงมือแล้ว',evidence_recorded:'บันทึกหลักฐานแล้ว · ผู้ใช้รายงาน'})[value || 'not_started'];
-  return `<section class="learn-hero"><div><span class="eyebrow">FIRST JOBBER MONEY LAB</span><h1>3 เรื่องเงินที่ต้องใช้ตั้งแต่เงินเดือนแรก</h1><p>ภาษี การลงทุน และหนี้ แต่ละบทมี infographic คำถามเช็กความเข้าใจ และงานที่ทำได้ทันที</p></div><div class="mastery-ring" style="--mastery:${Math.round(moneyMastered*100/MONEY_LAB_UNITS.length)}%"><strong>${moneyMastered}/3</strong><span>จบบทหลัก</span></div></section>
-  <div class="money-lab-grid">${MONEY_LAB_UNITS.map((unit,index)=>{const progress=state.mastery?.[unit.id]||'not_started'; const topic=['tax','investing','debt'][index]; return `<article class="money-lab-card ${topic}"><img src="${escapeHtml(unit.infographics[0].src)}" alt="" loading="lazy"><div><span class="eyebrow">บทที่ ${index+1} · ${unit.duration_minutes} นาที · ${label(progress)}</span><h2>${escapeHtml(unit.title)}</h2><p>${escapeHtml(unit.summary)}</p><button class="primary" data-action="open-lesson" data-lesson="${unit.id}">เริ่มบทเรียน <span>→</span></button></div></article>`;}).join('')}</div>
-  <section class="route-learning-head"><span class="eyebrow">JUST-IN-TIME DEBT LESSONS</span><h2>บทเรียนแก้หนี้ตามเคส</h2><p>ระบบเรียงบทที่ตรงกับ route ของคุณไว้ก่อน</p></section>
-  <div class="lesson-path">${units.map((unit,index)=>{const progress=state.mastery?.[unit.id]||'not_started'; return `<article class="${index===0?'current':''}"><div class="lesson-icon">${progress==='evidence_recorded'?'✓':'▥'}</div><div><span class="eyebrow">${contextual.includes(unit)?'ตรงกับเคสนี้':'เรียนเพิ่ม'} · ${unit.duration_minutes} นาที · ${label(progress)}</span><h2>${escapeHtml(unit.decision)}</h2><p>${escapeHtml(unit.action.label)}</p></div><button data-action="open-lesson" data-lesson="${unit.id}" aria-label="เปิดบท ${escapeHtml(unit.decision)}">→</button></article>`;}).join('')}</div>
-  <section class="lesson-callout"><b>บทเรียนไม่ใช่เส้นชัย</b><p>เครื่องหมายนี้หมายถึงผู้ใช้บันทึกหลักฐานเอง เช่น เลขรับเรื่อง ข้อเสนอ หรือวันนัด ระบบยังไม่ได้ตรวจสอบกับหน่วยงานภายนอก</p></section>`;
+  const routeUnit = contextual[0];
+  const allCompleted = COURSES.reduce((sum, course) => sum + courseStats(course.id, state.curriculumProgress).completed, 0);
+  const storedUnit = unitById(state.currentUnitId);
+  const storedRecord = storedUnit ? curriculumRecord(storedUnit.id) : null;
+  const current = storedUnit && Number(storedRecord.bestScore || 0) < PASSING_SCORE
+    ? storedUnit
+    : firstAvailableUnit(courseById(storedUnit?.course || state.selectedCourse));
+  const currentCourse = courseById(current.course);
+  const currentRecord = curriculumRecord(current.id);
+  const overall = Math.round((allCompleted / 18) * 100);
+  return `<section class="academy-hero">
+    <div><span class="eyebrow">FIRST JOBBER MONEY LAB · 3 หลักสูตร · 18 ระดับ</span><h1>เรียนเรื่องเงินให้ตัดสินใจเองได้</h1><p>เรียนตามลำดับจากพื้นฐานไปถึงระบบแบบมืออาชีพ ทุกระดับมีตัวอย่าง แบบฝึกหัด Quiz และงานที่ใช้กับชีวิตจริง</p>
+      <button class="primary" data-action="open-unit" data-unit="${current.id}">${currentRecord.status === 'not_started' ? 'เริ่มเรียน' : 'เรียนต่อ'}: ${escapeHtml(current.title)} <span>→</span></button>
+    </div>
+    <div class="academy-score" style="--academy-progress:${overall}%"><strong>${overall}%</strong><span>ผ่าน ${allCompleted} จาก 18 ระดับ</span><small>เกณฑ์ผ่าน 2/3 ต่อระดับ</small></div>
+  </section>
+  <section class="learning-principles" aria-label="รูปแบบการเรียน"><div><b>01</b><span>เรียนทีละแนวคิด</span></div><div><b>02</b><span>ดูตัวอย่างที่คำนวณให้</span></div><div><b>03</b><span>ตอบคำถามและลงมือทำ</span></div></section>
+  <div class="academy-course-grid">${COURSES.map((course) => {
+    const stats = courseStats(course.id, state.curriculumProgress);
+    const next = firstAvailableUnit(course);
+    return `<article class="academy-course ${course.color}">
+      <div class="course-cover"><img src="${courseGraphic(course.id)}" alt="" loading="lazy"><span class="course-symbol">${course.icon}</span></div>
+      <div class="course-copy"><span class="eyebrow">หลักสูตร · ${course.units.length} ระดับ · ${stats.completed}/${stats.total} ผ่าน</span><h2>${escapeHtml(course.title)}</h2><p>${escapeHtml(course.description)}</p>
+        <div class="level-dots" aria-label="ผ่าน ${stats.completed} จาก ${stats.total} ระดับ">${course.units.map((unit) => `<i class="${Number(curriculumRecord(unit.id).bestScore || 0) >= PASSING_SCORE ? 'done' : isUnitUnlocked(unit, state.curriculumProgress) ? 'open' : 'locked'}"></i>`).join('')}</div>
+        <button class="secondary" data-action="open-course" data-course="${course.id}">ดูแผนการเรียน <span>→</span></button><small>ระดับถัดไป: ${escapeHtml(next.title)}</small>
+      </div>
+    </article>`;
+  }).join('')}</div>
+  ${routeUnit ? `<section class="context-lesson"><div><span class="eyebrow">บทเรียนตามสถานการณ์ของคุณ · ${routeUnit.duration_minutes} นาที</span><h2>${escapeHtml(routeUnit.decision)}</h2><p>${escapeHtml(routeUnit.action.label)}</p></div><button class="secondary" data-action="open-lesson" data-lesson="${routeUnit.id}">เปิดบทเร่งด่วน →</button></section>` : ''}`;
+}
+
+function courseView() {
+  const course = courseById(state.selectedCourse);
+  const stats = courseStats(course.id, state.curriculumProgress);
+  const next = firstAvailableUnit(course);
+  return `<section class="course-head ${course.color}"><div><button class="breadcrumb" data-screen="learn">← หลักสูตรทั้งหมด</button><span class="eyebrow">${course.icon} ${escapeHtml(course.shortTitle)} · COURSE MAP</span><h1>${escapeHtml(course.title)}</h1><p>${escapeHtml(course.description)}</p></div><div class="course-progress"><strong>${stats.completed}/${stats.total}</strong><span>ระดับที่ผ่าน</span><div><i style="width:${stats.percent}%"></i></div></div></section>
+  <div class="course-map-layout">
+    <aside class="course-syllabus"><span class="eyebrow">แผนการเรียน</span>${course.units.map((unit) => {
+      const record = curriculumRecord(unit.id);
+      const unlocked = isUnitUnlocked(unit, state.curriculumProgress);
+      const passed = Number(record.bestScore || 0) >= PASSING_SCORE;
+      return `<button class="syllabus-item ${unit.id === next.id ? 'current' : ''} ${passed ? 'passed' : ''}" data-action="open-unit" data-unit="${unit.id}" ${unlocked ? '' : 'disabled'}><span>${passed ? '✓' : unlocked ? unit.level : '⌁'}</span><div><small>LEVEL ${unit.level}</small><b>${escapeHtml(unit.title)}</b><em>${unlocked ? progressLabel(record) : 'ผ่านระดับก่อนเพื่อปลดล็อก'}</em></div></button>`;
+    }).join('')}</aside>
+    <section class="course-overview"><div class="course-overview-visual"><img src="${courseGraphic(course.id)}" alt="ภาพรวมหลักสูตร ${escapeHtml(course.shortTitle)}"></div><span class="eyebrow">ระดับที่ควรเรียนต่อ</span><h2>Level ${next.level} · ${escapeHtml(next.title)}</h2><p class="course-outcome">เรียนจบแล้วคุณจะ: ${escapeHtml(next.outcome)}</p>
+      <div class="course-meta"><span>◷ ${next.minutes} นาที</span><span>▥ ${next.steps.length} ช่วงเรียน</span><span>✓ Quiz ${next.quiz.length} ข้อ</span></div>
+      <button class="primary" data-action="open-unit" data-unit="${next.id}">${curriculumRecord(next.id).status === 'not_started' ? 'เริ่มระดับนี้' : 'เรียนต่อ'} <span>→</span></button>
+      <section class="unlock-rule"><b>วิธีผ่านหลักสูตร</b><p>ทำ Quiz ได้อย่างน้อย ${PASSING_SCORE}/${next.quiz.length} เพื่อปลดล็อกระดับถัดไป คุณกลับมาทบทวนหรือทำใหม่ได้ทุกเวลา</p></section>
+    </section>
+  </div>`;
+}
+
+function renderLessonStep(unit, step, index) {
+  const heading = `<div class="lesson-step-heading"><span class="step-kind">${({concept:'แนวคิด',worked_example:'ตัวอย่างทำให้ดู',visual:'ภาพอธิบาย',practice:'ลองตัดสินใจ',apply:'นำไปใช้'})[step.type]}</span><h1>${escapeHtml(step.title)}</h1><p>${escapeHtml(step.lead)}</p></div>`;
+  if (step.type === 'concept') return `${heading}<div class="reading-body">${step.paragraphs.map((paragraph) => `<p>${escapeHtml(paragraph)}</p>`).join('')}${step.bullets?.length ? `<ul>${step.bullets.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>` : ''}</div>`;
+  if (step.type === 'worked_example') return `${heading}<div class="worked-table">${step.rows.map(([label,value]) => `<div><b>${escapeHtml(label)}</b><span>${escapeHtml(value)}</span></div>`).join('')}</div><div class="worked-result"><span>ผลลัพธ์ที่ต้องอ่านออก</span><b>${escapeHtml(step.result)}</b>${step.note ? `<small>${escapeHtml(step.note)}</small>` : ''}</div>`;
+  if (step.type === 'visual') return `${heading}<figure class="lesson-visual"><img src="${escapeHtml(step.graphic.src)}" alt="${escapeHtml(step.graphic.alt)}"><figcaption>${escapeHtml(step.graphic.caption)}</figcaption></figure>${step.paragraphs?.length ? `<div class="reading-body compact">${step.paragraphs.map((paragraph) => `<p>${escapeHtml(paragraph)}</p>`).join('')}</div>` : ''}`;
+  if (step.type === 'practice') {
+    const key = `${unit.id}:${index}`;
+    const selected = state.practiceAnswers?.[key];
+    const answered = Number.isInteger(selected);
+    return `${heading}<section class="inline-practice"><span class="eyebrow">KNOWLEDGE CHECK</span><h2>${escapeHtml(step.question.prompt)}</h2><div class="answer-options">${step.question.options.map((option, optionIndex) => `<button class="answer-option ${answered && optionIndex === selected ? optionIndex === step.question.answer ? 'correct' : 'wrong' : ''}" data-action="answer-practice" data-option="${optionIndex}"><span>${String.fromCharCode(65 + optionIndex)}</span>${escapeHtml(option)}</button>`).join('')}</div>${answered ? `<div class="answer-explanation ${selected === step.question.answer ? 'correct' : 'wrong'}"><b>${selected === step.question.answer ? 'ถูกต้อง' : 'ยังไม่ใช่'}</b><p>${escapeHtml(step.question.explanation)}</p></div>` : '<small>เลือกคำตอบเพื่อดูเหตุผล ไม่หักคะแนน</small>'}</section>`;
+  }
+  return `${heading}<section class="application-card"><span class="eyebrow">APPLICATION TASK</span><div class="apply-checklist">${step.checklist.map((item, itemIndex) => `<div><span>${itemIndex + 1}</span><p>${escapeHtml(item)}</p></div>`).join('')}</div><div class="artifact-box"><span>ชิ้นงานหลังเรียน</span><b>${escapeHtml(step.artifact)}</b></div></section>`;
+}
+
+function courseLessonView() {
+  const unit = unitById(state.currentUnitId) || courseById(state.selectedCourse).units[0];
+  const course = courseById(unit.course);
+  if (!isUnitUnlocked(unit, state.curriculumProgress)) return `<section class="locked-unit"><span>⌁</span><h1>ระดับนี้ยังไม่ปลดล็อก</h1><p>ผ่าน Level ${unit.level - 1} อย่างน้อย ${PASSING_SCORE}/3 ก่อน</p><button class="primary" data-action="open-course" data-course="${course.id}">กลับไป Course Map</button></section>`;
+  const stepIndex = Math.max(0, Math.min(Number(state.lessonStep || 0), unit.steps.length - 1));
+  const step = unit.steps[stepIndex];
+  const percent = Math.round(((stepIndex + 1) / unit.steps.length) * 100);
+  return `<div class="lesson-player ${course.color}">
+    <aside class="lesson-rail"><button class="breadcrumb" data-action="open-course" data-course="${course.id}">← Course Map</button><span class="eyebrow">${course.icon} ${escapeHtml(course.shortTitle)} · LEVEL ${unit.level}</span><h2>${escapeHtml(unit.title)}</h2><div class="lesson-step-list">${unit.steps.map((item,index) => `<button class="${index === stepIndex ? 'current' : index < stepIndex ? 'read' : ''}" data-action="go-lesson-step" data-step="${index}"><span>${index < stepIndex ? '✓' : index + 1}</span><div><small>${({concept:'แนวคิด',worked_example:'ตัวอย่าง',visual:'ภาพอธิบาย',practice:'แบบฝึก',apply:'ลงมือทำ'})[item.type]}</small><b>${escapeHtml(item.title)}</b></div></button>`).join('')}</div></aside>
+    <article class="lesson-reading"><header class="mobile-lesson-progress"><span>Level ${unit.level} · ${stepIndex + 1}/${unit.steps.length}</span><div><i style="width:${percent}%"></i></div></header>${renderLessonStep(unit, step, stepIndex)}
+      <footer class="lesson-controls"><button class="secondary" data-action="lesson-previous" ${stepIndex === 0 ? 'disabled' : ''}>← ย้อนกลับ</button>${stepIndex === unit.steps.length - 1 ? `<button class="primary" data-action="start-course-quiz">ทำ Quiz ${unit.quiz.length} ข้อ <span>→</span></button>` : `<button class="primary" data-action="lesson-next">ช่วงถัดไป <span>→</span></button>`}</footer>
+      <div class="lesson-provenance"><span>เนื้อหาจากหนังสือ First Jobber Money Lab · ตรวจทานกับ</span><a href="${unit.source.url}" target="_blank" rel="noreferrer">${escapeHtml(unit.source.owner)} ↗</a><small>ตรวจล่าสุด ${escapeHtml(unit.source.reviewed_date)}</small></div>
+    </article>
+  </div>`;
+}
+
+function courseQuizView() {
+  const unit = unitById(state.currentUnitId) || courseById(state.selectedCourse).units[0];
+  const course = courseById(unit.course);
+  const answers = state.quizAnswers || {};
+  const score = unit.quiz.reduce((sum, question, index) => sum + (Number(answers[index]) === question.answer ? 1 : 0), 0);
+  const passed = state.quizSubmitted && score >= PASSING_SCORE;
+  return `<article class="course-quiz ${course.color}"><button class="breadcrumb" data-action="return-to-lesson">← กลับไปบทเรียน</button><span class="eyebrow">LEVEL ${unit.level} · UNIT QUIZ</span><h1>${escapeHtml(unit.title)}</h1><p>ตอบ ${unit.quiz.length} ข้อ ต้องได้อย่างน้อย ${PASSING_SCORE}/${unit.quiz.length} เพื่อปลดล็อกระดับถัดไป</p>
+    <div class="quiz-progress"><i style="width:${Math.round((Object.keys(answers).length / unit.quiz.length) * 100)}%"></i></div>
+    <div class="quiz-list">${unit.quiz.map((question,index) => {
+      const selected = Number(answers[index]);
+      const hasAnswer = Number.isInteger(selected);
+      return `<section class="quiz-question ${state.quizSubmitted ? selected === question.answer ? 'correct' : 'wrong' : ''}"><span>ข้อ ${index + 1}</span><h2>${escapeHtml(question.prompt)}</h2><div class="answer-options">${question.options.map((option,optionIndex) => `<button class="answer-option ${hasAnswer && selected === optionIndex ? 'selected' : ''} ${state.quizSubmitted && optionIndex === question.answer ? 'correct' : ''}" data-action="answer-quiz" data-question="${index}" data-option="${optionIndex}" ${state.quizSubmitted ? 'disabled' : ''}><span>${String.fromCharCode(65 + optionIndex)}</span>${escapeHtml(option)}</button>`).join('')}</div>${state.quizSubmitted ? `<div class="quiz-explanation"><b>${selected === question.answer ? 'ถูกต้อง' : 'คำตอบที่ถูกแสดงด้วยสีเขียว'}</b><p>${escapeHtml(question.explanation)}</p></div>` : ''}</section>`;
+    }).join('')}</div>
+    ${state.quizSubmitted ? `<section class="quiz-result ${passed ? 'passed' : 'retry'}"><div class="result-score"><strong>${score}/${unit.quiz.length}</strong><span>${passed ? 'ผ่านระดับนี้แล้ว' : 'ยังไม่ผ่าน ลองทบทวนอีกครั้ง'}</span></div><p>${passed ? 'ระดับถัดไปถูกปลดล็อกแล้ว คุณทบทวนบทนี้หรือเดินหน้าต่อได้' : `ต้องได้อย่างน้อย ${PASSING_SCORE}/${unit.quiz.length} ระบบเก็บคะแนนที่ดีที่สุดไว้`}</p><div class="button-row">${passed ? `<button class="secondary" data-action="open-course" data-course="${course.id}">กลับ Course Map</button><button class="primary" data-action="open-next-unit">เรียนระดับถัดไป <span>→</span></button>` : `<button class="secondary" data-action="return-to-lesson">ทบทวนบทเรียน</button><button class="primary" data-action="retry-course-quiz">ทำ Quiz ใหม่</button>`}</div></section>` : `<button class="primary quiz-submit" data-action="submit-course-quiz" ${Object.keys(answers).length === unit.quiz.length ? '' : 'disabled'}>ส่งคำตอบและดูผล <span>→</span></button>`}
+  </article>`;
 }
 
 function lessonView() {
@@ -901,6 +1030,9 @@ function render() {
     payoff: payoffView,
     reminders: remindersView,
     learn: learnView,
+    course: courseView,
+    'course-lesson': courseLessonView,
+    'course-quiz': courseQuizView,
     lesson: lessonView,
     history: historyView,
     data: dataView,
@@ -910,7 +1042,7 @@ function render() {
   app.innerHTML = `<div class="shell">${topBar()}<main id="main" class="content" tabindex="-1">
     ${state.notice ? `<div class="notice" role="alert">${escapeHtml(state.notice)}</div>` : ''}
     ${view()}</main>${bottomNav()}</div>`;
-  document.querySelector('#main')?.focus();
+  document.querySelector('#main')?.focus({ preventScroll: true });
   if (pendingFocusTarget) {
     const target = document.querySelector(`[data-field-anchor="${pendingFocusTarget}"]`) || document.querySelector(`#${pendingFocusTarget}`) || document.querySelector(`[name="${pendingFocusTarget}"]`);
     pendingFocusTarget = null;
@@ -1061,7 +1193,7 @@ app.addEventListener('click', async (event) => {
       consent:'home','intake-money':'consent','intake-status':'intake-money',
       'intake-details':'intake-status',diagnosis:'intake-details','action-plan':'diagnosis',
       portfolio:'home','debt-editor':'portfolio',payoff:'portfolio',reminders:'portfolio',
-      learn:'home',lesson:'learn',history:'home',data:'home','delete-confirm':'data'
+      learn:'home',course:'learn','course-lesson':'course','course-quiz':'course-lesson',lesson:'learn',history:'home',data:'home','delete-confirm':'data'
     };
     state.screen = back[state.screen] || 'home';
   }
@@ -1088,6 +1220,100 @@ app.addEventListener('click', async (event) => {
       state.notice = 'กรุณายืนยันสถานะหนี้ ขั้นกฎหมาย และเลือกประเภทหนี้อย่างน้อยหนึ่งข้อ';
     } else if (assessment.error) state.notice = assessment.error.message;
     else { syncDebtFromIntake(); state.assessmentSaved = null; state.clientAssessmentId = crypto.randomUUID(); state.remoteAssessmentId = null; state.screen = 'diagnosis'; state.notice = ''; trackPilot('route_completed',{route:assessment.result.route}); }
+  }
+  if (action === 'open-course') {
+    const course = courseById(button.dataset.course || state.selectedCourse);
+    state.selectedCourse = course.id;
+    state.screen = 'course';
+    state.notice = '';
+  }
+  if (action === 'open-unit') {
+    const unit = unitById(button.dataset.unit);
+    if (!unit || !isUnitUnlocked(unit, state.curriculumProgress)) {
+      state.notice = 'ผ่านระดับก่อนหน้าอย่างน้อย 2/3 เพื่อปลดล็อกบทนี้';
+    } else {
+      const record = curriculumRecord(unit.id);
+      state.selectedCourse = unit.course;
+      state.currentUnitId = unit.id;
+      state.lessonStep = Math.min(Number(record.step || 0), unit.steps.length - 1);
+      state.curriculumProgress[unit.id] = { ...record, status: Number(record.bestScore || 0) >= PASSING_SCORE ? 'completed' : 'in_progress', step: Math.max(1, Number(record.step || 0)) };
+      state.quizAnswers = {};
+      state.quizSubmitted = false;
+      state.screen = 'course-lesson';
+      state.notice = '';
+    }
+  }
+  if (action === 'go-lesson-step') {
+    const unit = unitById(state.currentUnitId);
+    const nextStep = Math.max(0, Math.min(Number(button.dataset.step || 0), (unit?.steps.length || 1) - 1));
+    state.lessonStep = nextStep;
+    const record = curriculumRecord(unit.id);
+    state.curriculumProgress[unit.id] = { ...record, status: 'in_progress', step: Math.max(Number(record.step || 0), nextStep + 1) };
+  }
+  if (action === 'lesson-next' || action === 'lesson-previous') {
+    const unit = unitById(state.currentUnitId);
+    if (unit) {
+      const direction = action === 'lesson-next' ? 1 : -1;
+      state.lessonStep = Math.max(0, Math.min(Number(state.lessonStep || 0) + direction, unit.steps.length - 1));
+      const record = curriculumRecord(unit.id);
+      state.curriculumProgress[unit.id] = { ...record, status: 'in_progress', step: Math.max(Number(record.step || 0), state.lessonStep + 1) };
+    }
+  }
+  if (action === 'answer-practice') {
+    const unit = unitById(state.currentUnitId);
+    if (unit) state.practiceAnswers[`${unit.id}:${state.lessonStep}`] = Number(button.dataset.option);
+  }
+  if (action === 'start-course-quiz') {
+    const unit = unitById(state.currentUnitId);
+    if (unit) {
+      const record = curriculumRecord(unit.id);
+      state.curriculumProgress[unit.id] = { ...record, status: 'in_progress', step: unit.steps.length };
+      state.quizAnswers = {};
+      state.quizSubmitted = false;
+      state.screen = 'course-quiz';
+    }
+  }
+  if (action === 'answer-quiz' && !state.quizSubmitted) {
+    state.quizAnswers[Number(button.dataset.question)] = Number(button.dataset.option);
+  }
+  if (action === 'submit-course-quiz') {
+    const unit = unitById(state.currentUnitId);
+    if (unit && Object.keys(state.quizAnswers || {}).length === unit.quiz.length) {
+      const score = unit.quiz.reduce((sum, question, index) => sum + (Number(state.quizAnswers[index]) === question.answer ? 1 : 0), 0);
+      const record = curriculumRecord(unit.id);
+      const bestScore = Math.max(Number(record.bestScore || 0), score);
+      const passed = bestScore >= PASSING_SCORE;
+      state.curriculumProgress[unit.id] = { ...record, status: passed ? 'completed' : 'in_progress', step: unit.steps.length, bestScore, ...(passed ? { completedAt: new Date().toISOString() } : {}) };
+      state.quizSubmitted = true;
+      if (passed && Number(record.bestScore || 0) < PASSING_SCORE) state.history.push({ date: today(), title: `ผ่าน Level ${unit.level} · ${courseById(unit.course).shortTitle}`, note: `${unit.title} · คะแนน ${score}/${unit.quiz.length}` });
+    }
+  }
+  if (action === 'retry-course-quiz') {
+    state.quizAnswers = {};
+    state.quizSubmitted = false;
+  }
+  if (action === 'return-to-lesson') {
+    const unit = unitById(state.currentUnitId);
+    if (unit) state.lessonStep = unit.steps.length - 1;
+    state.quizSubmitted = false;
+    state.screen = 'course-lesson';
+  }
+  if (action === 'open-next-unit') {
+    const unit = unitById(state.currentUnitId);
+    const course = courseById(unit?.course || state.selectedCourse);
+    const next = course.units[Number(unit?.level || 0) + 1];
+    if (next && isUnitUnlocked(next, state.curriculumProgress)) {
+      const record = curriculumRecord(next.id);
+      state.currentUnitId = next.id;
+      state.lessonStep = 0;
+      state.curriculumProgress[next.id] = { ...record, status: 'in_progress', step: Math.max(1, Number(record.step || 0)) };
+      state.quizAnswers = {};
+      state.quizSubmitted = false;
+      state.screen = 'course-lesson';
+    } else {
+      state.screen = 'course';
+      state.notice = unit?.level === course.units.length - 1 ? 'ผ่านครบทั้งหลักสูตรแล้ว' : '';
+    }
   }
   if (action === 'open-lesson') {
     state.currentLesson = button.dataset.lesson || LEARNING_UNITS[0].id;
