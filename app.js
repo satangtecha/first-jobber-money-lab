@@ -159,6 +159,7 @@ const load = () => {
 let state = load();
 let currentUser = null;
 let sessionChecked = false;
+const LOCAL_ONLY_DISTRIBUTION = location.hostname.endsWith('.github.io') || (location.hostname === 'localhost' && location.protocol === 'https:');
 let authEmailDraft = '';
 let pendingFocusTarget = null;
 const save = () => localStorage.setItem(STORE_KEY, JSON.stringify(state));
@@ -1045,10 +1046,12 @@ function historyView() {
 function dataView() {
   return `<section class="data-panel"><span class="eyebrow">DATA & PRIVACY</span><h1>ข้อมูลของคุณควบคุมได้</h1>
     <div class="data-row"><div><b>ร่างในอุปกรณ์</b><span>เปิดอยู่ · บันทึกอัตโนมัติ</span></div><span class="status-dot">พร้อม</span></div>
-    <div class="data-row"><div><b>Sync ข้ามอุปกรณ์</b><span>${currentUser ? (state.assessmentSaved===true?'เชื่อมแล้ว':'พร้อมเมื่อบันทึกแผน') : (sessionChecked?'ต้องยืนยันอีเมล':'กำลังตรวจ session')}</span></div><span class="status-dot">${currentUser && state.assessmentSaved===true?'บันทึกแล้ว':'Local'}</span></div>
+    <div class="data-row"><div><b>Sync ข้ามอุปกรณ์</b><span>${LOCAL_ONLY_DISTRIBUTION ? 'รุ่นเว็บสาธารณะ/APK เก็บข้อมูลไว้ในอุปกรณ์นี้' : currentUser ? (state.assessmentSaved===true?'เชื่อมแล้ว':'พร้อมเมื่อบันทึกแผน') : (sessionChecked?'ต้องยืนยันอีเมล':'กำลังตรวจ session')}</span></div><span class="status-dot">${currentUser && state.assessmentSaved===true?'บันทึกแล้ว':'Local'}</span></div>
     <div class="data-row"><div><b>ข้อมูลที่ไม่เก็บใน Route Check</b><span>OTP · รหัสผ่าน · เลขบัตรเต็ม</span></div></div>
     <div class="data-row"><div><b>Pilot metrics ในอุปกรณ์</b><span>${state.pilotEvents.length} events · ไม่มีจำนวนเงินดิบ</span></div><span class="status-dot">Local</span></div>
-    ${currentUser
+    ${LOCAL_ONLY_DISTRIBUTION
+      ? `<div class="session-card"><span class="eyebrow">LOCAL-FIRST RELEASE</span><h2>ใช้งานได้โดยไม่ต้องสร้างบัญชี</h2><small>ข้อมูลภาษี พอร์ตจำลอง แผนหนี้ และความคืบหน้าบทเรียนอยู่ในอุปกรณ์นี้เท่านั้น คุณดาวน์โหลดสำเนา JSON ได้ด้านล่าง</small></div>`
+      : currentUser
       ? `<div class="session-card"><span class="eyebrow">SIGNED IN</span><b>${escapeHtml(currentUser.email || 'บัญชีที่ยืนยันแล้ว')}</b><small>แผนใหม่จึงจะส่งไปบันทึกบน server</small></div>`
       : `<div class="session-card"><span class="eyebrow">SYNC เมื่อคุณต้องการ</span><h2>ส่ง Magic Link เพื่อบันทึกข้ามอุปกรณ์</h2><label class="input-card" for="authEmail"><span>อีเมล</span><input id="authEmail" type="email" autocomplete="email" value="${escapeHtml(authEmailDraft)}" placeholder="name@example.com"></label><button class="secondary" data-action="request-link">ส่ง Magic Link</button></div>`}
     <div class="data-actions"><button class="secondary" data-action="export-data">ดาวน์โหลดสำเนา JSON</button><button class="danger-button" data-action="prepare-delete-local">ลบข้อมูลในอุปกรณ์นี้</button>${currentUser?'<button class="danger-button outline" data-action="prepare-delete-server">ลบ assessment/action ที่ sync และข้อมูลในอุปกรณ์</button>':''}</div>
@@ -1159,6 +1162,12 @@ async function consumeAuthCallback() {
 }
 
 async function refreshSessionUser() {
+  if (LOCAL_ONLY_DISTRIBUTION) {
+    currentUser = null;
+    sessionChecked = true;
+    if (state.screen === 'data' || state.screen === 'diagnosis') render();
+    return;
+  }
   try { currentUser = await getSessionUser(); }
   catch { currentUser = null; }
   sessionChecked = true;
@@ -1468,6 +1477,7 @@ app.addEventListener('click', async (event) => {
   }
   if (action === 'request-link') {
     try {
+      if (LOCAL_ONLY_DISTRIBUTION) throw new Error('รุ่นนี้เก็บข้อมูลในอุปกรณ์และยังไม่เปิด Sync ข้ามอุปกรณ์');
       if (!/^\S+@\S+\.\S+$/.test(authEmailDraft)) throw new Error('กรอกอีเมลให้ถูกต้อง');
       await requestMagicLink(authEmailDraft);
       state.notice = 'ส่ง Magic Link แล้ว เปิดอีเมลบนอุปกรณ์นี้เพื่อเชื่อมบัญชี';
