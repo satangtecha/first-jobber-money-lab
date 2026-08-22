@@ -1,0 +1,1674 @@
+/* ═══════════════════════════════════════════════════════════
+   SkillSpark × Mascot Coach Theme
+   Vibrant Sky-Blue, Soft Clean Light Canvas, Floating Pill Nav,
+   and Interactive Egg Mascot Coach Integration
+   ═══════════════════════════════════════════════════════════ */
+
+:root {
+  --sp-canvas: #F4F7FB;
+  --sp-surface: #FFFFFF;
+  --sp-surface-soft: #F8FAFC;
+  --sp-border: #E2E8F0;
+  --sp-border-strong: #CBD5E1;
+  --sp-ink: #0F172A;
+  --sp-muted: #64748B;
+  --sp-subtle: #94A3B8;
+  
+  /* Primary Signature Sky Blue */
+  --sp-blue: #00A3FF;
+  --sp-blue-hover: #0284C7;
+  --sp-blue-gradient: linear-gradient(135deg, #00A3FF 0%, #0284C7 100%);
+  --sp-blue-soft: #E0F2FE;
+  --sp-blue-tint: #F0F9FF;
+  
+  /* Warm Accents */
+  --sp-gold: #F59E0B;
+  --sp-gold-soft: #FEF3C7;
+  --sp-flame: #FF5B22;
+  --sp-flame-soft: #FFF1EB;
+  --sp-purple: #7C3AED;
+  --sp-purple-soft: #F3E8FF;
+  --sp-teal: #10B981;
+  --sp-teal-soft: #ECFDF5;
+  
+  /* Floating Bottom Nav */
+  --sp-dock-bg: #2C3038;
+  --sp-dock-border: #3A3F4A;
+  --sp-dock-active: #FFFFFF;
+  
+  /* Radii & Shadows */
+  --sp-radius-xl: 32px;
+  --sp-radius-lg: 24px;
+  --sp-radius-md: 16px;
+  --sp-radius-pill: 9999px;
+  --sp-shadow-card: 0 10px 30px rgba(15, 23, 42, 0.04), 0 2px 8px rgba(15, 23, 42, 0.02);
+  --sp-shadow-hover: 0 20px 40px rgba(0, 163, 255, 0.12), 0 4px 12px rgba(15, 23, 42, 0.05);
+  --sp-shadow-blue: 0 10px 25px rgba(0, 163, 255, 0.35);
+}
+
+/* ── Global Canvas Frame ── */
+body {
+  background-color: var(--sp-canvas);
+  color: var(--sp-ink);
+  font-family: "Plus Jakarta Sans", "Prompt", system-ui, -apple-system, sans-serif;
+  margin: 0;
+  padding: 0;
+  -webkit-font-smoothing: antialiased;
+}
+
+.shell {
+  min-height: 100vh;
+  background-color: var(--sp-canvas);
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Top Header (SkillSpark Style) ── */
+.sp-top-header {
+  background: var(--sp-surface);
+  border-bottom: 1px solid var(--sp-border);
+  position: sticky;
+  top: 0;
+  z-index: 60;
+  padding: 12px 24px;
+  box-shadow: 0 2px 12px rgba(15, 23, 42, 0.02);
+}
+
+.sp-top-inner {
+  max-width: 1280px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+/* App Brand Capsule */
+.sp-brand-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  background: #1E293B;
+  color: #FFFFFF;
+  border: 0;
+  padding: 6px 16px 6px 8px;
+  border-radius: var(--sp-radius-pill);
+  cursor: pointer;
+  transition: transform 0.18s ease, background-color 0.18s ease;
+  font-family: inherit;
+}
+.sp-brand-badge:hover {
+  transform: translateY(-1px);
+  background: #0F172A;
+}
+
+.sp-brand-icon-wrap {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--sp-blue);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+.sp-brand-icon-wrap svg {
+  width: 18px;
+  height: 18px;
+  color: #FFFFFF;
+}
+
+.sp-brand-name {
+  font-size: 0.95rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+/* Center Nav Pills (Desktop) */
+.sp-nav-center {
+  display: flex;
+  align-items: center;
+  background: var(--sp-surface-soft);
+  border: 1px solid var(--sp-border);
+  border-radius: var(--sp-radius-pill);
+  padding: 4px 6px;
+  gap: 4px;
+}
+
+.sp-nav-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: 0;
+  color: var(--sp-muted);
+  font-family: inherit;
+  font-size: 0.88rem;
+  font-weight: 600;
+  padding: 8px 18px;
+  border-radius: var(--sp-radius-pill);
+  cursor: pointer;
+  transition: all 0.18s ease;
+  white-space: nowrap;
+}
+.sp-nav-pill:hover {
+  color: var(--sp-ink);
+  background: #FFFFFF;
+}
+.sp-nav-pill.active {
+  background: var(--sp-blue);
+  color: #FFFFFF;
+  box-shadow: 0 4px 14px rgba(0, 163, 255, 0.3);
+}
+
+/* Right Actions (Bell & Profile Avatar) */
+.sp-top-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.sp-bell-btn {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: var(--sp-surface-soft);
+  border: 1px solid var(--sp-border);
+  color: var(--sp-ink);
+  display: grid;
+  place-items: center;
+  position: relative;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+.sp-bell-btn:hover {
+  background: #FFFFFF;
+  border-color: var(--sp-blue);
+}
+.sp-bell-dot {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--sp-blue);
+  box-shadow: 0 0 0 2px #FFFFFF;
+}
+
+.sp-profile-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--sp-surface-soft);
+  border: 1px solid var(--sp-border);
+  border-radius: var(--sp-radius-pill);
+  padding: 4px 12px 4px 4px;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+.sp-profile-btn:hover {
+  background: #FFFFFF;
+  border-color: var(--sp-blue);
+}
+.sp-profile-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  overflow: hidden;
+  background: #E2E8F0;
+  display: grid;
+  place-items: center;
+}
+.sp-profile-avatar svg {
+  width: 100%;
+  height: 100%;
+}
+.sp-profile-name {
+  font-size: 0.84rem;
+  font-weight: 700;
+  color: var(--sp-ink);
+}
+
+/* ── Main App Container ── */
+.content {
+  width: 100%;
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 24px 20px 110px;
+  box-sizing: border-box;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   1. Onboarding Showcase Card (Screen 1 Style)
+   ═══════════════════════════════════════════════════════════ */
+.sp-onboarding-card {
+  background: var(--sp-surface);
+  border-radius: var(--sp-radius-xl);
+  border: 1.5px solid var(--sp-border);
+  padding: 48px 40px;
+  box-shadow: var(--sp-shadow-card);
+  display: grid;
+  grid-template-columns: 1fr 1.2fr;
+  gap: 40px;
+  align-items: center;
+  position: relative;
+  overflow: hidden;
+  margin-bottom: 32px;
+}
+
+.sp-onboarding-illustration {
+  position: relative;
+  display: grid;
+  place-items: center;
+}
+.sp-hero-svg {
+  width: 100%;
+  max-width: 320px;
+  height: auto;
+}
+.sp-onboarding-mascot {
+  position: absolute;
+  right: -10px;
+  bottom: -15px;
+  width: 110px;
+  height: 140px;
+  filter: drop-shadow(0 12px 24px rgba(0, 163, 255, 0.2));
+  animation: sp-float 3.5s ease-in-out infinite;
+}
+
+@keyframes sp-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px); }
+}
+
+.sp-onboarding-copy {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.sp-onboarding-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--sp-blue-soft);
+  color: var(--sp-blue-hover);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 6px 14px;
+  border-radius: var(--sp-radius-pill);
+}
+
+.sp-onboarding-copy h1 {
+  font-size: 2.5rem;
+  font-weight: 800;
+  color: var(--sp-ink);
+  letter-spacing: -0.04em;
+  margin: 0;
+  line-height: 1.15;
+}
+
+.sp-onboarding-copy p {
+  font-size: 1.05rem;
+  color: var(--sp-muted);
+  line-height: 1.6;
+  margin: 0;
+  max-width: 480px;
+}
+
+.sp-btn-get-started {
+  background: var(--sp-blue);
+  color: #FFFFFF;
+  border: 0;
+  border-radius: var(--sp-radius-pill);
+  padding: 16px 36px;
+  font-size: 1.05rem;
+  font-weight: 700;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  box-shadow: var(--sp-shadow-blue);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  margin-top: 8px;
+}
+.sp-btn-get-started:hover {
+  background: var(--sp-blue-hover);
+  transform: translateY(-2px);
+  box-shadow: 0 14px 30px rgba(0, 163, 255, 0.45);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   2. Course Learning Dashboard (Screen 2 Style)
+   ═══════════════════════════════════════════════════════════ */
+.sp-dashboard-hub {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+/* Greeting & Search / Filter Row */
+.sp-hub-header {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.sp-hub-greeting {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.sp-hub-greeting small {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--sp-muted);
+}
+.sp-hub-greeting h2 {
+  font-size: 2.2rem;
+  font-weight: 800;
+  color: var(--sp-ink);
+  margin: 0;
+  letter-spacing: -0.03em;
+}
+
+/* Search Icon Button & Filter Tabs */
+.sp-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  scrollbar-width: none;
+}
+.sp-filter-bar::-webkit-scrollbar { display: none; }
+
+.sp-search-circle-btn {
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  border-radius: 50%;
+  background: #1E293B;
+  color: #FFFFFF;
+  border: 0;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+.sp-search-circle-btn:hover {
+  background: #0F172A;
+  transform: scale(1.05);
+}
+
+.sp-filter-tab {
+  background: var(--sp-surface);
+  border: 1px solid var(--sp-border);
+  color: var(--sp-muted);
+  font-family: inherit;
+  font-size: 0.88rem;
+  font-weight: 600;
+  padding: 10px 20px;
+  border-radius: var(--sp-radius-pill);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.18s ease;
+}
+.sp-filter-tab:hover {
+  border-color: var(--sp-blue);
+  color: var(--sp-ink);
+}
+.sp-filter-tab.active {
+  background: #FFFFFF;
+  border-color: #E2E8F0;
+  color: var(--sp-ink);
+  font-weight: 700;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.06);
+}
+
+/* ── 2-Column Hub Layout ── */
+.sp-hub-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: 28px;
+  align-items: start;
+}
+
+/* ── Featured Sky-Blue Hero Card (Screen 2) ── */
+.sp-featured-blue-card {
+  background: var(--sp-blue-gradient);
+  border-radius: var(--sp-radius-xl);
+  padding: 28px 32px;
+  color: #FFFFFF;
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 16px 36px rgba(0, 163, 255, 0.28);
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.sp-featured-blue-card:hover {
+  transform: translateY(-2px);
+}
+
+/* Subtle background wave circles */
+.sp-featured-blue-card::before {
+  content: "";
+  position: absolute;
+  right: -40px;
+  bottom: -40px;
+  width: 220px;
+  height: 220px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.12);
+  pointer-events: none;
+}
+.sp-featured-blue-card::after {
+  content: "";
+  position: absolute;
+  right: 40px;
+  bottom: -60px;
+  width: 160px;
+  height: 160px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  pointer-events: none;
+}
+
+.sp-card-top-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  position: relative;
+  z-index: 2;
+}
+
+/* Instructor & Mascot Badge */
+.sp-instructor-chip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(255, 255, 255, 0.2);
+  backdrop-filter: blur(8px);
+  padding: 4px 14px 4px 4px;
+  border-radius: var(--sp-radius-pill);
+}
+.sp-instructor-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #FFFFFF;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+}
+.sp-instructor-avatar svg {
+  width: 100%;
+  height: 100%;
+}
+.sp-instructor-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+}
+.sp-instructor-text b {
+  font-size: 0.82rem;
+  color: #FFFFFF;
+}
+.sp-instructor-text small {
+  font-size: 0.7rem;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.sp-badge-tag {
+  background: rgba(255, 255, 255, 0.25);
+  backdrop-filter: blur(6px);
+  color: #FFFFFF;
+  font-size: 0.76rem;
+  font-weight: 700;
+  padding: 6px 12px;
+  border-radius: var(--sp-radius-pill);
+}
+
+.sp-card-main-title {
+  font-size: 1.55rem;
+  font-weight: 800;
+  color: #FFFFFF;
+  margin: 0;
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+  position: relative;
+  z-index: 2;
+}
+
+.sp-card-meta-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font-size: 0.88rem;
+  color: rgba(255, 255, 255, 0.9);
+  position: relative;
+  z-index: 2;
+}
+.sp-card-meta-row span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sp-card-bottom-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  position: relative;
+  z-index: 2;
+  margin-top: 4px;
+}
+
+/* Avatar Stack */
+.sp-avatar-stack {
+  display: flex;
+  align-items: center;
+}
+.sp-stack-item {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2px solid #00A3FF;
+  background: #FFFFFF;
+  margin-left: -8px;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  font-size: 0.72rem;
+  font-weight: 800;
+  color: var(--sp-ink);
+}
+.sp-stack-item:first-child { margin-left: 0; }
+.sp-stack-more {
+  background: rgba(255, 255, 255, 0.3);
+  color: #FFFFFF;
+  border-color: #00A3FF;
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 0 4px;
+}
+
+.sp-btn-join-class {
+  background: #FFFFFF;
+  color: #0284C7;
+  border: 0;
+  border-radius: var(--sp-radius-pill);
+  padding: 10px 22px;
+  font-size: 0.92rem;
+  font-weight: 800;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.1);
+  transition: all 0.18s ease;
+}
+.sp-btn-join-class:hover {
+  background: #F8FAFC;
+  transform: translateY(-1px);
+  color: #00A3FF;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   3. Learning Streak Widget (Screen 2 Style)
+   ═══════════════════════════════════════════════════════════ */
+.sp-streak-card {
+  background: var(--sp-surface);
+  border: 1.5px solid var(--sp-border);
+  border-radius: var(--sp-radius-xl);
+  padding: 26px 28px;
+  box-shadow: var(--sp-shadow-card);
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.sp-streak-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.sp-streak-left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.sp-flame-icon-wrap {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: var(--sp-flame-soft);
+  color: var(--sp-flame);
+  display: grid;
+  place-items: center;
+  font-size: 1.3rem;
+}
+
+.sp-streak-text h3 {
+  font-size: 1.15rem;
+  font-weight: 800;
+  margin: 0;
+  color: var(--sp-ink);
+}
+.sp-streak-text small {
+  font-size: 0.8rem;
+  color: var(--sp-muted);
+}
+
+/* Streak Progress Ring */
+.sp-streak-ring-wrap {
+  position: relative;
+  width: 48px;
+  height: 48px;
+  display: grid;
+  place-items: center;
+}
+.sp-streak-ring-wrap svg {
+  transform: rotate(-90deg);
+  width: 48px;
+  height: 48px;
+}
+.sp-streak-ring-bg {
+  stroke: var(--sp-border);
+}
+.sp-streak-ring-fill {
+  stroke: var(--sp-flame);
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.6s ease;
+}
+.sp-streak-ring-num {
+  position: absolute;
+  font-size: 0.76rem;
+  font-weight: 800;
+  color: var(--sp-ink);
+}
+
+/* Day Numbers Bar */
+.sp-days-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  border-top: 1px solid var(--sp-border);
+  padding-top: 16px;
+}
+
+.sp-day-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: var(--sp-muted);
+}
+.sp-day-pill {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--sp-surface-soft);
+  border: 1px solid var(--sp-border);
+  display: grid;
+  place-items: center;
+  color: var(--sp-muted);
+  font-size: 0.86rem;
+  font-weight: 800;
+  transition: all 0.18s ease;
+}
+.sp-day-item.active .sp-day-pill {
+  background: var(--sp-blue);
+  border-color: var(--sp-blue);
+  color: #FFFFFF;
+  box-shadow: 0 4px 12px rgba(0, 163, 255, 0.3);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   4. Course Track Grid / Roadmap
+   ═══════════════════════════════════════════════════════════ */
+.sp-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 16px;
+}
+.sp-section-heading h3 {
+  font-size: 1.35rem;
+  font-weight: 800;
+  color: var(--sp-ink);
+  margin: 0;
+}
+
+.sp-course-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 20px;
+}
+
+.sp-course-card {
+  background: var(--sp-surface);
+  border: 1.5px solid var(--sp-border);
+  border-radius: var(--sp-radius-lg);
+  padding: 20px;
+  box-shadow: var(--sp-shadow-card);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 16px;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  text-align: left;
+}
+.sp-course-card:hover {
+  border-color: var(--sp-blue);
+  transform: translateY(-2px);
+  box-shadow: var(--sp-shadow-hover);
+}
+
+.sp-course-card-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.sp-course-cover-box {
+  width: 90px;
+  height: 80px;
+  border-radius: 14px;
+  overflow: hidden;
+  background: var(--sp-surface-soft);
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+.sp-course-cover-box svg, .sp-course-cover-box img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.sp-course-card-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.sp-course-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: var(--sp-blue-hover);
+  background: var(--sp-blue-soft);
+  padding: 2px 8px;
+  border-radius: var(--sp-radius-pill);
+  width: fit-content;
+}
+.sp-course-card-title {
+  font-size: 1.05rem;
+  font-weight: 800;
+  color: var(--sp-ink);
+  margin: 2px 0 0;
+  line-height: 1.3;
+}
+.sp-course-card-desc {
+  font-size: 0.84rem;
+  color: var(--sp-muted);
+  margin: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.sp-course-card-bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-top: 1px solid var(--sp-border);
+  padding-top: 12px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--sp-muted);
+}
+.sp-course-rating {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--sp-gold);
+  font-weight: 700;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   5. Course Details Screen (Screen 3 Style)
+   ═══════════════════════════════════════════════════════════ */
+.sp-course-details-view {
+  background: var(--sp-surface);
+  border-radius: var(--sp-radius-xl);
+  border: 1.5px solid var(--sp-border);
+  padding: 32px 36px;
+  box-shadow: var(--sp-shadow-card);
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+/* Hero Banner on Detail Page */
+.sp-detail-hero-banner {
+  background: linear-gradient(135deg, #0EA5E9 0%, #0284C7 50%, #0369A1 100%);
+  border-radius: var(--sp-radius-lg);
+  padding: 36px;
+  color: #FFFFFF;
+  display: grid;
+  grid-template-columns: 1fr 200px;
+  align-items: center;
+  gap: 24px;
+  position: relative;
+  overflow: hidden;
+}
+.sp-detail-mascot-box {
+  display: grid;
+  place-items: center;
+}
+.sp-detail-mascot-box svg {
+  width: 140px;
+  height: 180px;
+  filter: drop-shadow(0 12px 24px rgba(0, 0, 0, 0.25));
+}
+
+.sp-detail-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+  background: var(--sp-surface-soft);
+  border: 1px solid var(--sp-border);
+  border-radius: var(--sp-radius-lg);
+  padding: 16px 20px;
+}
+.sp-meta-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.85rem;
+}
+.sp-meta-cell b {
+  color: var(--sp-ink);
+}
+.sp-meta-cell span {
+  color: var(--sp-muted);
+}
+
+/* Tab list on detail page */
+.sp-detail-tabs {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  border-bottom: 2px solid var(--sp-border);
+}
+.sp-detail-tab {
+  background: none;
+  border: 0;
+  padding: 12px 0;
+  font-family: inherit;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--sp-muted);
+  cursor: pointer;
+  position: relative;
+  transition: color 0.18s ease;
+}
+.sp-detail-tab:hover {
+  color: var(--sp-ink);
+}
+.sp-detail-tab.active {
+  color: var(--sp-blue);
+}
+.sp-detail-tab.active::after {
+  content: "";
+  position: absolute;
+  bottom: -2px;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: var(--sp-blue);
+  border-radius: 999px;
+}
+
+/* Chapter List Item (Numbered 01, 02 + Circular Play Button) */
+.sp-chapter-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sp-chapter-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  background: var(--sp-surface);
+  border: 1.5px solid var(--sp-border);
+  border-radius: var(--sp-radius-md);
+  padding: 16px 20px;
+  transition: all 0.18s ease;
+  cursor: pointer;
+}
+.sp-chapter-item:hover {
+  border-color: var(--sp-blue);
+  background: var(--sp-blue-tint);
+}
+.sp-chapter-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.sp-chapter-num {
+  font-size: 1.1rem;
+  font-weight: 800;
+  color: var(--sp-subtle);
+  width: 28px;
+}
+.sp-chapter-title-wrap b {
+  font-size: 0.95rem;
+  color: var(--sp-ink);
+}
+.sp-chapter-title-wrap small {
+  display: block;
+  font-size: 0.78rem;
+  color: var(--sp-muted);
+}
+.sp-chapter-play-btn {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--sp-blue);
+  color: #FFFFFF;
+  border: 0;
+  display: grid;
+  place-items: center;
+  font-size: 0.9rem;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(0, 163, 255, 0.35);
+  transition: transform 0.18s ease;
+}
+.sp-chapter-play-btn:hover {
+  transform: scale(1.08);
+}
+
+/* Sticky Bottom Action Bar */
+.sp-sticky-enroll-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  background: var(--sp-surface);
+  border: 1.5px solid var(--sp-border);
+  border-radius: var(--sp-radius-pill);
+  padding: 12px 24px;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.08);
+  margin-top: 16px;
+}
+.sp-btn-enroll {
+  background: var(--sp-blue);
+  color: #FFFFFF;
+  border: 0;
+  border-radius: var(--sp-radius-pill);
+  padding: 14px 36px;
+  font-size: 1rem;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: var(--sp-shadow-blue);
+  transition: all 0.18s ease;
+}
+.sp-btn-enroll:hover {
+  background: var(--sp-blue-hover);
+  transform: translateY(-1px);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   6. Mascot Dialogue & Coach Cards Across Labs
+   ═══════════════════════════════════════════════════════════ */
+.sp-coach-speech-card {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  background: var(--sp-surface);
+  border: 1.5px solid var(--sp-border);
+  border-radius: var(--sp-radius-lg);
+  padding: 20px 24px;
+  box-shadow: var(--sp-shadow-card);
+  margin-bottom: 20px;
+}
+.sp-coach-mascot-wrap {
+  width: 70px;
+  height: 90px;
+  flex-shrink: 0;
+}
+.sp-coach-bubble {
+  flex: 1;
+  background: var(--sp-blue-soft);
+  border-radius: 16px;
+  padding: 14px 18px;
+  position: relative;
+}
+.sp-coach-bubble::before {
+  content: "";
+  position: absolute;
+  left: -8px;
+  top: 24px;
+  width: 0;
+  height: 0;
+  border-top: 8px solid transparent;
+  border-bottom: 8px solid transparent;
+  border-right: 8px solid var(--sp-blue-soft);
+}
+.sp-coach-bubble b {
+  display: block;
+  font-size: 0.86rem;
+  color: var(--sp-blue-hover);
+  margin-bottom: 2px;
+}
+.sp-coach-bubble p {
+  font-size: 0.92rem;
+  color: var(--sp-ink);
+  margin: 0;
+  line-height: 1.45;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   7. Floating Bottom Navigation Bar (Screen 2 Style)
+   ═══════════════════════════════════════════════════════════ */
+.sp-dock-nav {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--sp-dock-bg);
+  border: 1px solid var(--sp-dock-border);
+  border-radius: var(--sp-radius-pill);
+  padding: 6px 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.35);
+  z-index: 90;
+}
+
+.sp-dock-item {
+  background: transparent;
+  border: 0;
+  color: #94A3B8;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  padding: 0;
+}
+.sp-dock-item svg {
+  width: 22px;
+  height: 22px;
+  stroke-width: 2;
+}
+.sp-dock-item:hover {
+  color: #FFFFFF;
+  background: rgba(255, 255, 255, 0.12);
+}
+.sp-dock-item.active {
+  background: var(--sp-dock-active);
+  color: var(--sp-ink);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2);
+  transform: scale(1.05);
+}
+
+/* ── Learning Progress & Challenges Hub ── */
+.sp-progress-hero-card,
+.learning-progress-hero {
+  background: var(--sp-surface);
+  border: 1.5px solid var(--sp-border);
+  border-radius: var(--sp-radius-xl);
+  padding: 32px;
+  box-shadow: var(--sp-shadow-card);
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: 28px;
+  align-items: center;
+  margin-bottom: 24px;
+}
+
+.sp-progress-hero-card h1,
+.learning-progress-hero h1 {
+  color: var(--sp-ink) !important;
+  font-size: clamp(1.8rem, 4vw, 2.3rem);
+  font-weight: 800;
+  margin: 8px 0 10px 0;
+  letter-spacing: -0.02em;
+}
+
+.sp-progress-hero-card p,
+.learning-progress-hero p,
+.learning-progress-hero > p {
+  color: var(--sp-muted) !important;
+  font-size: 0.95rem;
+  line-height: 1.5;
+  margin: 0 0 16px 0;
+}
+
+.sp-progress-hero-card .eyebrow,
+.learning-progress-hero .eyebrow {
+  color: var(--sp-blue) !important;
+  font-size: 0.75rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.learning-progress-score {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.learning-progress-score strong {
+  font-size: clamp(2.5rem, 6vw, 3.5rem);
+  font-weight: 850;
+  color: var(--sp-blue);
+  line-height: 1;
+}
+
+.learning-progress-score b {
+  color: var(--sp-ink) !important;
+  font-size: 1rem;
+  font-weight: 700;
+  display: block;
+}
+
+.learning-progress-score span {
+  color: var(--sp-muted) !important;
+  font-size: 0.85rem;
+  display: block;
+}
+
+.sp-progress-stats-strip {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  background: var(--sp-canvas-soft);
+  border: 1px solid var(--sp-border);
+  border-radius: var(--sp-radius-md);
+  padding: 14px 20px;
+  margin-top: 16px;
+  width: fit-content;
+  max-width: 100%;
+}
+
+.sp-stat-box {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sp-stat-num {
+  font-size: 1.4rem;
+  font-weight: 850;
+  color: var(--sp-ink);
+  line-height: 1.1;
+}
+
+.sp-stat-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--sp-muted);
+}
+
+.sp-stat-divider {
+  width: 1px;
+  height: 32px;
+  background: var(--sp-border);
+}
+
+/* Fix old outcome and hero classes to always have pristine contrast */
+.outcome,
+.outcome.tight,
+.outcome-tight {
+  background: var(--sp-surface) !important;
+  border: 1.5px solid var(--sp-border) !important;
+  color: var(--sp-ink) !important;
+}
+
+.outcome h1, .outcome h2, .outcome h3,
+.outcome-tight h1, .outcome-tight h2, .outcome-tight h3 {
+  color: var(--sp-ink) !important;
+}
+
+.progress-course {
+  background: var(--sp-surface) !important;
+  border: 1.5px solid var(--sp-border) !important;
+  border-radius: var(--sp-radius-lg) !important;
+  color: var(--sp-ink) !important;
+  box-shadow: var(--sp-shadow-card) !important;
+}
+
+.progress-course h2 {
+  color: var(--sp-ink) !important;
+}
+
+.progress-course p {
+  color: var(--sp-muted) !important;
+}
+
+.progress-history-link {
+  background: var(--sp-surface) !important;
+  border: 1.5px solid var(--sp-border) !important;
+  border-radius: var(--sp-radius-lg) !important;
+  color: var(--sp-ink) !important;
+  box-shadow: var(--sp-shadow-card) !important;
+}
+
+.progress-history-link h2 {
+  color: var(--sp-ink) !important;
+}
+
+.progress-history-link p {
+  color: var(--sp-muted) !important;
+}
+
+/* ── Tax Lab & Financial Lab Results (High Contrast SkillSpark Style) ── */
+.tax-outcome {
+  padding: 24px;
+  border-radius: var(--sp-radius-xl);
+  border: 1.5px solid var(--sp-border);
+  background: var(--sp-surface);
+  box-shadow: var(--sp-shadow-card);
+  margin-bottom: 20px;
+}
+
+.tax-outcome .eyebrow {
+  font-size: 0.75rem !important;
+  font-weight: 800 !important;
+  letter-spacing: 0.08em !important;
+  margin-bottom: 4px;
+  display: block;
+}
+
+.tax-outcome > small {
+  display: block;
+  font-size: 0.85rem;
+  font-weight: 500;
+  margin-bottom: 8px;
+}
+
+.tax-outcome > strong {
+  display: block;
+  margin: 6px 0 10px 0;
+  font-size: clamp(2.3rem, 5vw, 3.4rem);
+  font-weight: 850;
+  letter-spacing: -0.04em;
+  line-height: 1.1;
+  font-family: inherit !important;
+}
+
+.tax-outcome > b {
+  display: block;
+  font-size: 1.05rem;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+/* Pay More Status (Orange/Amber with high contrast) */
+.tax-outcome.pay {
+  background: linear-gradient(135deg, #FFF7ED 0%, #FFEDD5 100%) !important;
+  border: 1.5px solid #FDBA74 !important;
+  color: #0F172A !important;
+}
+.tax-outcome.pay .eyebrow {
+  color: #C2410C !important;
+}
+.tax-outcome.pay > small {
+  color: #9A3412 !important;
+}
+.tax-outcome.pay > strong {
+  color: #EA580C !important;
+}
+.tax-outcome.pay > b {
+  color: #7C2D12 !important;
+}
+.tax-outcome.pay .reserve-callout {
+  background: #FFFFFF !important;
+  border: 1px solid #FED7AA !important;
+  border-radius: 14px !important;
+  padding: 12px 18px !important;
+  margin-top: 14px !important;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  box-shadow: 0 2px 8px rgba(194, 65, 12, 0.06);
+}
+.tax-outcome.pay .reserve-callout span {
+  color: #9A3412 !important;
+  font-size: 0.85rem !important;
+  font-weight: 600 !important;
+}
+.tax-outcome.pay .reserve-callout strong {
+  color: #C2410C !important;
+  font-size: 1.15rem !important;
+  font-weight: 850 !important;
+}
+
+/* Tax Refund Status (Fresh Emerald) */
+.tax-outcome.refund {
+  background: linear-gradient(135deg, #F0FDF4 0%, #DCFCE7 100%) !important;
+  border: 1.5px solid #86EFAC !important;
+  color: #0F172A !important;
+}
+.tax-outcome.refund .eyebrow {
+  color: #15803D !important;
+}
+.tax-outcome.refund > small {
+  color: #166534 !important;
+}
+.tax-outcome.refund > strong {
+  color: #16A34A !important;
+}
+.tax-outcome.refund > b {
+  color: #14532D !important;
+}
+.tax-outcome.refund .reserve-callout {
+  background: #FFFFFF !important;
+  border: 1px solid #BBF7D0 !important;
+  border-radius: 14px !important;
+  padding: 12px 18px !important;
+  margin-top: 14px !important;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.tax-outcome.refund .reserve-callout span {
+  color: #166534 !important;
+  font-size: 0.85rem !important;
+  font-weight: 600 !important;
+}
+.tax-outcome.refund .reserve-callout strong {
+  color: #15803D !important;
+  font-size: 1.15rem !important;
+  font-weight: 850 !important;
+}
+
+/* Even / Balanced Status (Sky Blue) */
+.tax-outcome.even {
+  background: linear-gradient(135deg, #F0F9FF 0%, #E0F2FE 100%) !important;
+  border: 1.5px solid #7DD3FC !important;
+  color: #0F172A !important;
+}
+.tax-outcome.even .eyebrow {
+  color: #0369A1 !important;
+}
+.tax-outcome.even > small {
+  color: #075985 !important;
+}
+.tax-outcome.even > strong {
+  color: #0284C7 !important;
+}
+.tax-outcome.even > b {
+  color: #0C4A6E !important;
+}
+
+/* ── Calculation Map (Waterfall) ── */
+.tax-waterfall {
+  margin: 20px 0;
+  background: var(--sp-surface);
+  border: 1.5px solid var(--sp-border);
+  border-radius: var(--sp-radius-lg);
+  padding: 20px;
+  box-shadow: var(--sp-shadow-subtle);
+}
+.tax-waterfall .eyebrow {
+  color: var(--sp-blue) !important;
+  font-size: 0.75rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  margin-bottom: 12px;
+  display: block;
+}
+.tax-waterfall > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(60px, 0.8fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--sp-border);
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--sp-ink);
+}
+.tax-waterfall > div span {
+  color: var(--sp-ink);
+}
+.tax-waterfall i {
+  height: 6px;
+  border-radius: 6px;
+  background: #E2E8F0;
+}
+.tax-waterfall b {
+  color: var(--sp-ink);
+  font-size: 0.95rem;
+  text-align: right;
+  white-space: nowrap;
+}
+.tax-waterfall .final {
+  border-top: 2px solid var(--sp-border);
+  border-bottom: none;
+  padding-top: 14px;
+  margin-top: 4px;
+}
+.tax-waterfall .final span {
+  color: var(--sp-blue);
+  font-weight: 800;
+  font-size: 0.95rem;
+}
+.tax-waterfall .final i {
+  background: var(--sp-blue-gradient);
+}
+.tax-waterfall .final b {
+  color: var(--sp-blue);
+  font-size: 1.15rem;
+  font-weight: 850;
+}
+
+/* ── Progressive Tax Brackets ── */
+.tax-brackets {
+  margin-top: 20px;
+  background: var(--sp-canvas-soft);
+  border: 1.5px solid var(--sp-border);
+  border-radius: var(--sp-radius-lg);
+  padding: 20px;
+}
+.tax-brackets .section-heading h2 {
+  color: var(--sp-ink) !important;
+  font-size: 1.1rem;
+  font-weight: 800;
+  margin: 4px 0;
+}
+.tax-brackets .section-heading > strong {
+  color: var(--sp-blue) !important;
+  font-weight: 800;
+  font-size: 0.85rem;
+}
+.tax-brackets > div:not(.section-heading) {
+  display: grid;
+  grid-template-columns: 50px 1fr 90px;
+  gap: 12px;
+  align-items: center;
+  margin: 10px 0;
+  font-size: 0.85rem;
+}
+.tax-brackets > div:not(.section-heading) span {
+  color: var(--sp-muted);
+  font-weight: 600;
+}
+.tax-brackets > div:not(.section-heading) > div {
+  height: 8px;
+  border-radius: 8px;
+  background: #E2E8F0;
+  overflow: hidden;
+}
+.tax-brackets > div:not(.section-heading) > div i {
+  display: block;
+  height: 100%;
+  background: var(--sp-teal);
+}
+.tax-brackets > div:not(.section-heading) b {
+  color: var(--sp-ink);
+  text-align: right;
+  font-weight: 700;
+}
+.tax-brackets > small {
+  display: block;
+  margin-top: 12px;
+  color: var(--sp-muted);
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+/* ── Tax Next Action Cards ── */
+.tax-next-actions {
+  margin-top: 20px;
+  display: grid;
+  gap: 10px;
+}
+.tax-next-actions > div {
+  background: var(--sp-surface);
+  border: 1.5px solid var(--sp-border);
+  border-radius: var(--sp-radius-md);
+  padding: 14px 18px;
+  box-shadow: var(--sp-shadow-subtle);
+}
+.tax-next-actions span {
+  color: var(--sp-muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  display: block;
+}
+.tax-next-actions b {
+  color: var(--sp-ink);
+  font-size: 0.95rem;
+  font-weight: 700;
+  margin-top: 4px;
+  display: block;
+}
+
+/* ── Investment Terminal Dark Card Fix ── */
+.ic-terminal-value,
+.ic-mandate-card,
+.ic-history-range,
+.sim-rule {
+  background: var(--sp-surface) !important;
+  border: 1.5px solid var(--sp-border) !important;
+  border-radius: var(--sp-radius-lg) !important;
+  color: var(--sp-ink) !important;
+  padding: 18px !important;
+  box-shadow: var(--sp-shadow-card) !important;
+}
+
+.ic-terminal-value strong {
+  color: var(--sp-blue) !important;
+  font-size: 1.8rem !important;
+  font-weight: 850 !important;
+}
+
+.ic-terminal-value span,
+.ic-terminal-value small,
+.ic-mandate-card p,
+.ic-history-range p,
+.sim-rule p {
+  color: var(--sp-muted) !important;
+}
+
+.ic-history-range strong {
+  color: var(--sp-ink) !important;
+}
+
+.ic-macro-board {
+  background: var(--sp-canvas-soft) !important;
+  border: 1.5px solid var(--sp-border) !important;
+  border-radius: var(--sp-radius-md) !important;
+  color: var(--sp-ink) !important;
+}
+.ic-macro-board > div {
+  border-right: 1px solid var(--sp-border) !important;
+}
+.ic-macro-board span {
+  color: var(--sp-muted) !important;
+}
+.ic-macro-board b {
+  color: var(--sp-ink) !important;
+}
+.ic-macro-board > small {
+  background: var(--sp-surface) !important;
+  color: var(--sp-muted) !important;
+  border-top: 1px solid var(--sp-border) !important;
+}
+
+/* ── Responsive Rules ── */
+@media (max-width: 960px) {
+  .sp-progress-hero-card,
+  .learning-progress-hero {
+    grid-template-columns: 1fr;
+    padding: 24px;
+  }
+  .sp-onboarding-card {
+    grid-template-columns: 1fr;
+    padding: 32px 24px;
+    text-align: center;
+  }
+  .sp-onboarding-copy {
+    align-items: center;
+  }
+  .sp-hub-grid {
+    grid-template-columns: 1fr;
+  }
+  .sp-detail-hero-banner {
+    grid-template-columns: 1fr;
+  }
+  .sp-nav-center {
+    display: none;
+  }
+  .sp-meta-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .content {
+    padding: 16px 12px 100px;
+  }
+  .sp-onboarding-copy h1 {
+    font-size: 1.85rem;
+  }
+  .sp-card-main-title {
+    font-size: 1.3rem;
+  }
+  .sp-course-grid {
+    grid-template-columns: 1fr;
+  }
+  .sp-detail-meta-grid {
+    grid-template-columns: 1fr;
+  }
+}

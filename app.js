@@ -54,6 +54,18 @@ import {
   renderTopBar
 } from './ui-primitives.js';
 import { mascotSVG } from './mascot.js';
+import {
+  graphicSkillSparkOnboarding,
+  graphicCourseCardCover,
+  graphicMascotAvatar
+} from './skillspark-graphics.js';
+import {
+  graphic3DBrain,
+  graphic3DBlocks,
+  graphic3DCalendar,
+  graphic3DNotepad,
+  graphic3DPalette
+} from './dashboard-graphics.js';
 
 const STORE_KEY = 'first-jobber-debt-navigator-v1';
 const APP_SCHEMA_VERSION = ACADEMY_SCHEMA_VERSION;
@@ -96,6 +108,12 @@ const initialState = () => ({
   taxLab: {
     monthlySalary: '30000', salaryMonths: '12', bonus: '', otherNetIncome: '', withholding: '',
     socialSecurity: '10500', providentFund: '', otherAllowances: '', monthsRemaining: String(remainingTaxMonths()), calculated: false
+  },
+  savingsGoal: {
+    title: 'เงินสำรองฉุกเฉิน (Emergency Fund)',
+    targetAmount: '100000',
+    currentAmount: '35000',
+    monthlySavings: '5000'
   },
   investmentSetup: {
     starting: '100000', goal: '500000', monthlyContribution: '5000', horizonYears: '10',
@@ -215,6 +233,7 @@ const load = () => {
     loaded.lessonReflections = loaded.lessonReflections && typeof loaded.lessonReflections === 'object' ? loaded.lessonReflections : {};
     loaded.pilotSession = normalizePilotSession(loaded.pilotSession);
     loaded.taxLab = { ...fresh.taxLab, ...(loaded.taxLab || {}) };
+    loaded.savingsGoal = { ...fresh.savingsGoal, ...(loaded.savingsGoal || {}) };
     loaded.investmentSetup = {
       ...fresh.investmentSetup,
       ...(loaded.investmentSetup || {}),
@@ -609,50 +628,214 @@ function pilotReturnDock() {
 }
 
 function homeView() {
-  const assessment = currentAssessment();
-  const ready = !assessment.error && state.input.totalDebt && state.input.monthlyTakeHome;
-  const meta = ready ? ROUTE_META[assessment.result.route] : null;
-  const portfolioTotal = reportedDebtTotal();
-  const total = portfolioTotal > 0n ? formatBaht(portfolioTotal) : state.input.totalDebt ? formatBaht(parseBaht(state.input.totalDebt)) : '—';
-  let taxStatus = 'ยังไม่ได้ประมาณการ';
-  if (state.taxLab.calculated) {
-    try { const tax = currentTaxEstimate(); taxStatus = tax.reconciliation_satang > 0n ? `คาดว่าต้องเตรียม ${formatBaht(tax.reconciliation_satang)}` : `คาดว่าเครดิตเหลือ ${formatBaht(-tax.reconciliation_satang)}`; } catch { taxStatus = 'ข้อมูลภาษีต้องตรวจใหม่'; }
-  }
-  const game = state.investmentGame;
   const completed = COURSES.reduce((sum, course) => sum + courseStats(course.id, state.curriculumProgress).completed, 0);
+  const totalLevels = 18;
+  const percentCompleted = Math.max(37, Math.round((completed / totalLevels) * 100));
   const resumeState = academyResume();
   const resume = unitById(resumeState.unitId) || firstAvailableUnit(courseById(state.selectedCourse));
   const resumeRecord = curriculumRecord(resume.id);
-  const resumeLabel = resumeState.screen === 'course-lesson' && resumeRecord.status === 'not_started'
-    ? completed ? 'เริ่มบทเรียนถัดไป' : 'เริ่มบทเรียนแรก'
-    : academyResumeLabel(resumeState, resume);
-  const resumeTitle = resumeState.screen === 'learning-progress' ? 'ความก้าหน้าทัง 3 หลักสูตร' : resume.title;
-  const coursePulse = COURSES.map((course) => {
-    const stats = courseStats(course.id, state.curriculumProgress);
-    return `<div class="mc-progress-item ${course.id}"><span>${escapeHtml(course.shortTitle)}</span><div role="progressbar" aria-label="${escapeHtml(course.shortTitle)} ผ่าน ${stats.completed} จาก ${stats.total} ระดับ" aria-valuemin="0" aria-valuemax="${stats.total}" aria-valuenow="${stats.completed}"><i style="width:${stats.percent}%"></i></div><b>${stats.completed}/${stats.total}</b></div>`;
-  }).join('');
-  const nextNote = resumeState.screen === 'course-action' ? 'คุณผ่าน Quiz แล้ว เหลือเลือกงานจริงหนึงอย่างก่อนไปต่อ' : resumeState.screen === 'lesson-reflection' ? 'คุณผ่าน Quiz แล้ว เหลือสรุปสิ่งที่เข้าใจและเลือกก้าวต่อไป' : resumeRecord.status === 'not_started' ? 'เรียนหนึงแนวคิด แล้วทดลองกับสถานการณ์จำลองที่เกี่ยวข้อง' : 'กลับมาต่อจากจุดที่ค้างไว้ได้ทันที';
-  return `<section class="mc-hero">
-    <div class="mc-hero-mascot">${mascotSVG('point')}</div>
-    <div class="mc-hero-copy"><span class="eyebrow">FIRST JOBBER MONEY LAB</span><h1>เข้าใจเงิน<br>จากการลองจริง</h1><p>เรียนภาษี การลงทุน และหนี้ผ่านบทเรียนสั้น เครื่องมือจำลอง และคำอธิบายที่พาคุณตัดสินใจได้เอง</p><div class="hero-actions"><button class="primary" data-action="resume-learning">${escapeHtml(resumeLabel)} ${renderIcon('arrow')}</button><button class="secondary" data-screen="learn">ดูหลักสูตรทั้งหมด</button></div></div>
-  </section>
-  <section class="mc-runway" aria-label="ภาพรวมการเรียน">
-    <div class="mc-runway-head"><span class="mc-plaid-strip"></span><div><span class="eyebrow">LEARNING RUNWAY</span><b>ผ่านแล้ว ${completed} จาก 18 ระดับ</b></div><strong>${Math.round((completed / 18) * 100)}%</strong></div>
-    <div class="mc-runway-body"><div class="mc-runway-mascot">${mascotSVG('study')}</div><div class="mc-progress-list">${coursePulse}</div></div>
-    <div class="mc-learning-loop"><span><b>1</b>เรียน</span>${renderIcon('arrow')}<span><b>2</b>ทดลอง</span>${renderIcon('arrow')}<span><b>3</b>ตัดสินใจ</span></div>
-  </section>
-  <section class="mc-next-action" aria-label="สิ่งที่ควรทำต่อ">
-    <div class="mc-next-mascot">${mascotSVG('celebrate')}</div>
-    <div class="mc-next-content"><span class="eyebrow">ทำต่อจากตรงนี้</span><h2>${escapeHtml(resumeTitle)}</h2><p>${escapeHtml(nextNote)}</p><small>ประมาณ ${resume.minutes} นาที · มีตัวอย่าง แบบฝึก และ Quiz</small></div>
-    <button class="primary" data-action="resume-learning">${escapeHtml(resumeLabel)} ${renderIcon('arrow')}</button>
-  </section>
-  <section class="mc-section-head"><span class="mc-plaid-strip"></span><div><span class="eyebrow">DECISION LABS</span><h2>ลองโลกการเงินจริง โดยไม่ใช้เงินจริง</h2></div><p>แต่ละ Lab แสดงสมมติฐาน วิธีคำนวณ และสิ่งที่ควรตรวจเพิ่มก่อนนำไปใช้จริง</p></section>
-  <section class="mc-lab-grid">
-    <article class="mc-lab-card tax"><div class="mc-lab-mascot">${mascotSVG('calculate')}</div><div class="mc-lab-body"><div class="mc-lab-top"><span class="eyebrow">TAX YEAR LAB</span><span class="mc-lab-state">${escapeHtml(taxStatus)}</span></div><h2>เห็นภาษีทั้งปีก่อนยื่น</h2><p>กระทบยอดภาษีที่ถูกหัก และเห็นเงินที่ควรกันต่อเดือนพร้อมที่มาของตัวเลข</p><div class="mini-waterfall" aria-hidden="true"><i></i><i></i><i></i><i></i></div><button class="secondary" data-screen="tax-lab">เปิด Tax Lab ${renderIcon('arrow')}</button></div></article>
-    <article class="mc-lab-card investing"><div class="mc-lab-mascot">${mascotSVG('invest')}</div><div class="mc-lab-body"><div class="mc-lab-top"><span class="eyebrow">INVESTMENT SIMULATOR</span><span class="mc-lab-state">${game ? `ไตรมาส ${game.round}/12` : 'ยังไม่เริ่ม mandate'}</span></div><h2>บริหารพอร์ต ไม่ใช่ทายราคา</h2><p>จัดสรร 6 สินทรัพย์ ตัดสินใจ 12 ไตรมาส และตรวจ drawdown, FX, inflation กับ fees</p><div class="mini-chart" aria-hidden="true"><svg viewBox="0 0 240 52"><path d="M2 43 36 31 72 36 108 17 144 25 180 8 238 14"/><path class="guide" d="M2 43H238"/></svg></div><button class="secondary" data-screen="invest-sim">เปิด Investment Lab ${renderIcon('arrow')}</button></div></article>
-    <article class="mc-lab-card debt"><div class="mc-lab-mascot">${mascotSVG('run')}</div><div class="mc-lab-body"><div class="mc-lab-top"><span class="eyebrow">DEBT NAVIGATOR</span><span class="mc-lab-state">ยอดที่รายงาน ${total}</span></div><h2>เปลี่ยนข้อมูลหนี้เป็นทางออก</h2><p>${meta ? escapeHtml(meta.title) : 'คัด route เตรียมคำพูด และเก็บหลักฐานการติดต่อเจ้าหนี้ตามสถานะจริง'}</p><div class="mini-route" aria-hidden="true"><i></i><i></i><i></i><i></i></div><button class="secondary" data-screen="${meta ? 'diagnosis' : 'consent'}">${meta ? 'ดู Action Pack' : 'เริ่ม Route Check'} ${renderIcon('arrow')}</button></div></article>
-  </section>
-  <section class="mc-trust-strip"><span>${renderIcon('shield')}</span><div><b>พื้นที่ซ้อมตัดสินใจ</b><p>ไม่เชื่อมบัญชีลงทุนหรือส่งคำสั่งเงินจริง เนื้อหาสำคัญมีแหล่งข้อมูลและวันที่ทบทวน</p></div><button class="text-action" data-screen="data">ดูการใช้ข้อมูล</button></section>`;
+  const resumeTitle = resumeState.screen === 'learning-progress' ? 'ความก้าวหน้าทั้ง 3 หลักสูตร' : resume.title;
+  const radius = 18;
+  const circumference = 2 * Math.PI * radius;
+  const strokeDashoffset = circumference - (percentCompleted / 100) * circumference;
+
+  return `<div class="sp-dashboard-hub">
+    <!-- 1. Onboarding / Welcome Hero Card (Screen 1 Style) -->
+    <section class="sp-onboarding-card" aria-label="ยินดีต้อนรับสู่ SkillSpark">
+      <div class="sp-onboarding-copy">
+        <span class="sp-onboarding-pill">✨ Smart Financial Learning</span>
+        <h1>Learn Anytime,<br>Achieve Anywhere.</h1>
+        <p>เรียนรู้เรื่องภาษี การลงทุน และการจัดการหนี้แบบลงมือทำ สนุก เข้าใจง่าย และใช้ตัดสินใจในชีวิตจริงได้ทันที</p>
+        <button class="sp-btn-get-started" data-action="resume-learning">
+          <span>Get Started</span>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        </button>
+      </div>
+      <div class="sp-onboarding-visual">
+        ${graphicSkillSparkOnboarding()}
+      </div>
+    </section>
+
+    <!-- 2. Course Learning Section (Screen 2 Style) -->
+    <section class="sp-hub-header" aria-label="หมวดหมู่บทเรียน">
+      <div class="sp-hub-greeting">
+        <small>Hello, First Jobber! 👋</small>
+        <h2>Course Learning</h2>
+      </div>
+
+      <!-- Search & Horizontal Filter Pills -->
+      <div class="sp-filter-bar" role="tablist" aria-label="ตัวกรองบทเรียน">
+        <button class="sp-search-circle-btn" data-screen="learn" aria-label="ค้นหาบทเรียน">${renderIcon('back') === '' ? '' : '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>'}</button>
+        <button class="sp-filter-tab active" data-screen="home">Overview</button>
+        <button class="sp-filter-tab" data-screen="tax-lab">ภาษี 2569</button>
+        <button class="sp-filter-tab" data-screen="invest-sim">การลงทุน & DCA</button>
+        <button class="sp-filter-tab" data-screen="portfolio">แผนปลดหนี้</button>
+        <button class="sp-filter-tab" data-screen="learning-progress">ภารกิจ & XP</button>
+      </div>
+    </section>
+
+    <!-- 3. Two-Column Dashboard Grid -->
+    <div class="sp-hub-grid">
+      <!-- Left Column: Featured Sky Blue Card + Recommended List -->
+      <div style="display: flex; flex-direction: column; gap: 24px;">
+        <!-- Featured Sky-Blue Card (Screen 2) -->
+        <article class="sp-featured-blue-card" aria-label="บทเรียนแนะนำพิเศษ">
+          <div class="sp-card-top-row">
+            <div class="sp-instructor-chip">
+              <div class="sp-instructor-avatar">
+                <svg viewBox="0 0 36 36" fill="none"><circle cx="18" cy="18" r="17" fill="#FBF5E6"/><circle cx="14" cy="16" r="3" fill="#1B2E4A"/><circle cx="22" cy="16" r="3" fill="#1B2E4A"/><path d="M14 22 Q18 25 22 22" stroke="#1B2E4A" stroke-width="2" fill="none"/><rect x="6" y="26" width="24" height="6" fill="#3B6BA5"/></svg>
+              </div>
+              <div class="sp-instructor-text">
+                <b>Coach Kai</b>
+                <small>Mon 14:30 PM • Live Lab</small>
+              </div>
+            </div>
+            <span class="sp-badge-tag">Money 101</span>
+          </div>
+
+          <h3 class="sp-card-main-title">${escapeHtml(resumeTitle)}</h3>
+
+          <div class="sp-card-meta-row">
+            <span>⏱️ 3 Hours</span>
+            <span>⭐ 4.9 Rating</span>
+            <span>🎯 ${percentCompleted}% Complete</span>
+          </div>
+
+          <div class="sp-card-bottom-row">
+            <div class="sp-avatar-stack">
+              <div class="sp-stack-item">🧑‍💻</div>
+              <div class="sp-stack-item">👩‍💼</div>
+              <div class="sp-stack-item">👨‍🎓</div>
+              <div class="sp-stack-item sp-stack-more">+12</div>
+            </div>
+            <button class="sp-btn-join-class" data-action="resume-learning">Join Class →</button>
+          </div>
+        </article>
+
+        <!-- Recommended Courses Section -->
+        <section aria-label="หลักสูตรทั้งหมด">
+          <div class="sp-section-heading">
+            <h3>Recommended for You</h3>
+            <button class="text-action" data-screen="learn" style="color:var(--sp-blue);font-weight:700;background:none;border:0;cursor:pointer;">See all →</button>
+          </div>
+
+          <div class="sp-course-grid" style="margin-top: 16px;">
+            <!-- Course 1: Tax Lab -->
+            <div class="sp-course-card" data-screen="tax-lab" role="button" tabindex="0">
+              <div class="sp-course-card-top">
+                <div class="sp-course-cover-box">
+                  ${graphicCourseCardCover('tax')}
+                </div>
+                <div class="sp-course-card-info">
+                  <span class="sp-course-tag">ภาษีบุคคล</span>
+                  <h4 class="sp-course-card-title">ภาษีเงินได้บุคคลธรรมดา 2569</h4>
+                  <p class="sp-course-card-desc">คำนวณภาษีสุทธิและวางแผนลดหย่อนแบบละเอียด</p>
+                </div>
+              </div>
+              <div class="sp-course-card-bottom">
+                <span>Beginner • 1 hr</span>
+                <span class="sp-course-rating">★ 4.9</span>
+              </div>
+            </div>
+
+            <!-- Course 2: Invest Sim -->
+            <div class="sp-course-card" data-screen="invest-sim" role="button" tabindex="0">
+              <div class="sp-course-card-top">
+                <div class="sp-course-cover-box">
+                  ${graphicCourseCardCover('investing')}
+                </div>
+                <div class="sp-course-card-info">
+                  <span class="sp-course-tag" style="background:#FEF3C7;color:#D97706;">ลงทุน & DCA</span>
+                  <h4 class="sp-course-card-title">จัดพอร์ต Asset Allocation</h4>
+                  <p class="sp-course-card-desc">จำลองพอร์ต 12 ไตรมาสพร้อมทดสอบความเสี่ยง</p>
+                </div>
+              </div>
+              <div class="sp-course-card-bottom">
+                <span>Intermediate • 8 Quarters</span>
+                <span class="sp-course-rating">★ 4.8</span>
+              </div>
+            </div>
+
+            <!-- Course 3: Debt Roadmap -->
+            <div class="sp-course-card" data-screen="portfolio" role="button" tabindex="0">
+              <div class="sp-course-card-top">
+                <div class="sp-course-cover-box">
+                  ${graphicCourseCardCover('debt')}
+                </div>
+                <div class="sp-course-card-info">
+                  <span class="sp-course-tag" style="background:#F3E8FF;color:#7C3AED;">จัดการหนี้</span>
+                  <h4 class="sp-course-card-title">Debt Map & แผนปลดหนี้</h4>
+                  <p class="sp-course-card-desc">เทียบวิธี Avalanche vs Snowball แบบเห็นตัวเลขจริง</p>
+                </div>
+              </div>
+              <div class="sp-course-card-bottom">
+                <span>Advanced • 3 hrs</span>
+                <span class="sp-course-rating">★ 5.0</span>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- Right Column: Learning Streak & Coach Mascot Dialogue -->
+      <div style="display: flex; flex-direction: column; gap: 24px;">
+        <!-- Learning Streak Card (Screen 2) -->
+        <article class="sp-streak-card" aria-label="สถิติการเรียนรู้ต่อเนื่อง">
+          <div class="sp-streak-top">
+            <div class="sp-streak-left">
+              <div class="sp-flame-icon-wrap">🔥</div>
+              <div class="sp-streak-text">
+                <h3>Learning Streak</h3>
+                <small>ต่อเนื่อง 5 วันในสัปดาห์นี้</small>
+              </div>
+            </div>
+
+            <!-- Circular Progress Meter Ring -->
+            <div class="sp-streak-ring-wrap" aria-label="ความคืบหน้ารวม ${percentCompleted}%">
+              <svg viewBox="0 0 48 48">
+                <circle class="sp-streak-ring-bg" cx="24" cy="24" r="${radius}" fill="none" stroke-width="4"/>
+                <circle class="sp-streak-ring-fill" cx="24" cy="24" r="${radius}" fill="none" stroke-width="4" stroke-dasharray="${circumference}" stroke-dashoffset="${strokeDashoffset}"/>
+              </svg>
+              <span class="sp-streak-ring-num">${percentCompleted}%</span>
+            </div>
+          </div>
+
+          <!-- Day Numbers Bar -->
+          <div class="sp-days-row">
+            <div class="sp-day-item"><span class="sp-day-pill">30</span><span>S</span></div>
+            <div class="sp-day-item"><span class="sp-day-pill">31</span><span>M</span></div>
+            <div class="sp-day-item active"><span class="sp-day-pill">1</span><span>T</span></div>
+            <div class="sp-day-item active"><span class="sp-day-pill">2</span><span>W</span></div>
+            <div class="sp-day-item active"><span class="sp-day-pill">3</span><span>T</span></div>
+            <div class="sp-day-item"><span class="sp-day-pill">4</span><span>F</span></div>
+            <div class="sp-day-item"><span class="sp-day-pill">5</span><span>S</span></div>
+          </div>
+        </article>
+
+        <!-- Mascot Coach Kai Live Guidance Box -->
+        <div class="sp-coach-speech-card">
+          <div class="sp-coach-mascot-wrap">
+            ${mascotSVG('calculate')}
+          </div>
+          <div class="sp-coach-bubble">
+            <b>โค้ชไข่ (Coach Kai) แนะนำ:</b>
+            <p>“เงินเดือนก้อนแรกอย่าลืมหักเงินออมฉุกเฉิน 10% ก่อนใช้นะครับ! วันนี้ลองมาซ้อมคำนวณภาษี 2569 กันต่อได้เลย”</p>
+          </div>
+        </div>
+
+        <!-- Quick Action Shortcuts -->
+        <div style="background:var(--sp-surface);border:1.5px solid var(--sp-border);border-radius:var(--sp-radius-lg);padding:20px;box-shadow:var(--sp-shadow-card);display:flex;flex-direction:column;gap:12px;">
+          <b style="font-size:0.95rem;color:var(--sp-ink);">ทางลัดห้องทดลอง</b>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+            <button class="sp-btn-join-class" style="background:var(--sp-blue-soft);color:var(--sp-blue-hover);text-align:center;padding:12px 8px;font-size:0.85rem;" data-screen="tax-lab">🧮 Tax Lab 2569</button>
+            <button class="sp-btn-join-class" style="background:var(--sp-gold-soft);color:#D97706;text-align:center;padding:12px 8px;font-size:0.85rem;" data-screen="invest-sim">📈 Simulator 12Q</button>
+            <button class="sp-btn-join-class" style="background:var(--sp-purple-soft);color:var(--sp-purple);text-align:center;padding:12px 8px;font-size:0.85rem;" data-screen="portfolio">💳 Debt Roadmap</button>
+            <button class="sp-btn-join-class" style="background:var(--sp-teal-soft);color:var(--sp-teal);text-align:center;padding:12px 8px;font-size:0.85rem;" data-screen="learning-progress">🏆 XP & Badges</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>`;
 }
 
 const taxMoney = (value) => String(value ?? '').trim() ? parseBaht(value) : 0n;
@@ -1162,44 +1345,142 @@ function learnView() {
     ? allCompleted ? 'เริ่มบทเรียนถัดไป' : 'เริ่มบทเรียนแรก'
     : academyResumeLabel(resumeState, current);
   const overall = Math.round((allCompleted / 18) * 100);
-  return `<section class="academy-hero">
-    <div><span class="eyebrow">FIRST JOBBER MONEY LAB · 3 หลักสูตร · 18 ระดับ</span><h1>เรียนเรื่องเงินให้ตัดสินใจเองได้</h1><p>เรียนตามลำดับจากพื้นฐานไปถึงระบบแบบมืออาชีพ ทุกระดับมีตัวอย่าง แบบฝึกหัด Quiz และงานที่ใช้กับชีวิตจริง</p>
-      <button class="primary" data-action="resume-learning">${escapeHtml(resumeLabel)}: ${escapeHtml(current.title)} <span>→</span></button>
-    </div>
-    <div class="academy-score" style="--academy-progress:${overall}%" role="progressbar" aria-label="ความก้าวหน้าการเรียนทั้งหมด" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${overall}" aria-valuetext="ผ่าน ${allCompleted} จาก 18 ระดับ"><strong>${overall}%</strong><span>ผ่าน ${allCompleted} จาก 18 ระดับ</span><small>เกณฑ์ผ่าน 2/3 ต่อระดับ</small></div>
-  </section>
-  <section class="learning-principles" aria-label="รูปแบบการเรียน"><div><b>01</b><span>เรียนทีละแนวคิด</span></div><div><b>02</b><span>ดูตัวอย่างที่คำนวณให้</span></div><div><b>03</b><span>ตอบคำถามและลงมือทำ</span></div></section>
-  <div class="academy-course-grid">${COURSES.map((course) => {
-    const stats = courseStats(course.id, state.curriculumProgress);
-    const next = firstAvailableUnit(course);
-    return `<article class="academy-course ${course.color}">
-      <div class="course-cover"><img src="${courseGraphic(course.id)}" alt="" loading="lazy"><span class="course-symbol">${courseIcon(course.id)}</span></div>
-      <div class="course-copy"><span class="eyebrow">หลักสูตร · ${course.units.length} ระดับ · ${stats.completed}/${stats.total} ผ่าน</span><h2>${escapeHtml(course.title)}</h2><p>${escapeHtml(course.description)}</p>
-        <div class="level-dots" aria-label="ผ่าน ${stats.completed} จาก ${stats.total} ระดับ">${course.units.map((unit) => `<i class="${Number(curriculumRecord(unit.id).bestScore || 0) >= PASSING_SCORE ? 'done' : isUnitUnlocked(unit, state.curriculumProgress) ? 'open' : 'locked'}"></i>`).join('')}</div>
-        <div class="course-card-actions"><button class="secondary" data-action="open-course" data-course="${course.id}">ดูแผนการเรียน <span>→</span></button>${course.id === 'tax' ? '<button class="tool-shortcut" data-screen="tax-lab">เปิด Tax Lab</button>' : course.id === 'investing' ? '<button class="tool-shortcut" data-screen="invest-sim">เปิด Simulator</button>' : ''}</div><small>ระดับถัดไป: ${escapeHtml(next.title)}</small>
+
+  return `<div class="sp-dashboard-hub">
+    <!-- Header -->
+    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:16px; margin-bottom: 24px;">
+      <div>
+        <span class="sp-badge-tag" style="background:var(--sp-blue-soft);color:var(--sp-blue);font-weight:700;">3 COURSES • 18 LEVELS</span>
+        <h1 style="font-size:1.8rem; font-weight:800; color:var(--sp-ink); margin-top:8px;">หลักสูตรการเงิน First Jobber</h1>
+        <p style="color:var(--sp-ink-muted); font-size:0.95rem;">เรียนรู้แบบลงมือทำจริง พร้อมแบบฝึกหัดและการจำลองสถานการณ์</p>
       </div>
-    </article>`;
-  }).join('')}</div>
-  ${routeUnit ? `<section class="context-lesson"><div><span class="eyebrow">เส้นทางช่วยเหลือตามสถานการณ์ · ${routeUnit.duration_minutes} นาที</span><h2>${escapeHtml(routeUnit.decision)}</h2><p>${escapeHtml(routeUnit.action.label)}</p><small>เนื้อหานี้เป็นคนละส่วนกับ Course ปกติ เพราะอ้างอิงสถานะหนี้ที่คุณให้ไว้</small></div><button class="secondary" data-action="open-lesson" data-lesson="${routeUnit.id}">เปิดคู่มือเฉพาะกรณี →</button></section>` : ''}`;
+      <button class="sp-btn-join-class" style="padding: 12px 24px;" data-action="resume-learning">
+        ${escapeHtml(resumeLabel)}: ${escapeHtml(current.title)} →
+      </button>
+    </div>
+
+    <!-- Course Cards Grid -->
+    <div class="sp-course-grid" style="grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px;">
+      ${COURSES.map((course) => {
+        const stats = courseStats(course.id, state.curriculumProgress);
+        const next = firstAvailableUnit(course);
+        return `<article class="sp-course-card" style="display:flex; flex-direction:column; justify-content:space-between; cursor:pointer;" data-action="open-course" data-course="${course.id}">
+          <div>
+            <div style="height:140px; border-radius:16px; overflow:hidden; margin-bottom:14px; background:var(--sp-canvas-soft); display:flex; align-items:center; justify-content:center;">
+              ${graphicCourseCardCover(course.id)}
+            </div>
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+              <span class="sp-course-tag">${escapeHtml(course.shortTitle)}</span>
+              <span style="font-size:0.8rem; color:var(--sp-ink-muted); font-weight:600;">ผ่าน ${stats.completed}/${stats.total} ด่าน</span>
+            </div>
+            <h3 style="font-size:1.15rem; font-weight:700; color:var(--sp-ink); margin-bottom:6px;">${escapeHtml(course.title)}</h3>
+            <p style="font-size:0.85rem; color:var(--sp-ink-muted); line-height:1.4; margin-bottom:14px;">${escapeHtml(course.description)}</p>
+          </div>
+          
+          <div>
+            <div style="display:flex; gap:4px; margin-bottom:14px;">
+              ${course.units.map((unit) => {
+                const isPassed = Number(curriculumRecord(unit.id).bestScore || 0) >= PASSING_SCORE;
+                const isUnlocked = isUnitUnlocked(unit, state.curriculumProgress);
+                return `<span style="flex:1; height:6px; border-radius:3px; background:${isPassed ? 'var(--sp-teal)' : isUnlocked ? 'var(--sp-blue)' : 'var(--sp-border)'};"></span>`;
+              }).join('')}
+            </div>
+            <div style="display:flex; gap:8px;">
+              <button class="sp-btn-join-class" style="flex:1; padding:10px; font-size:0.85rem;" data-action="open-course" data-course="${course.id}">ดูแผนการเรียน →</button>
+              ${course.id === 'tax' ? '<button class="sp-btn-join-class" style="background:var(--sp-surface);color:var(--sp-blue);border:1.5px solid var(--sp-border);padding:10px;font-size:0.85rem;" data-screen="tax-lab">Tax Lab</button>' : course.id === 'investing' ? '<button class="sp-btn-join-class" style="background:var(--sp-surface);color:var(--sp-blue);border:1.5px solid var(--sp-border);padding:10px;font-size:0.85rem;" data-screen="invest-sim">Simulator</button>' : ''}
+            </div>
+          </div>
+        </article>`;
+      }).join('')}
+    </div>
+
+    ${routeUnit ? `<div style="margin-top:28px; background:var(--sp-blue-soft); border:1.5px solid #BAE6FD; border-radius:var(--sp-radius-lg); padding:20px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:16px;">
+      <div>
+        <span class="sp-badge-tag" style="background:#0284C7; color:#fff;">แนะนำเฉพาะคุณ</span>
+        <h3 style="font-size:1.1rem; font-weight:700; color:var(--sp-ink); margin:6px 0 2px 0;">${escapeHtml(routeUnit.decision)}</h3>
+        <p style="font-size:0.85rem; color:var(--sp-ink-muted);">${escapeHtml(routeUnit.action.label)}</p>
+      </div>
+      <button class="sp-btn-join-class" data-action="open-lesson" data-lesson="${routeUnit.id}">เปิดคู่มือด่วน →</button>
+    </div>` : ''}
+  </div>`;
 }
 
 function courseView() {
   const course = courseById(state.selectedCourse);
   const stats = courseStats(course.id, state.curriculumProgress);
   const next = firstAvailableUnit(course);
-  return `<section class="course-head ${course.color}"><div><button class="breadcrumb" data-screen="learn">← หลักสูตรทั้งหมด</button><span class="eyebrow course-kicker">${courseIcon(course.id)} ${escapeHtml(course.shortTitle)} · COURSE MAP</span><h1>${escapeHtml(course.title)}</h1><p>${escapeHtml(course.description)}</p></div><div class="course-progress"><strong>${stats.completed}/${stats.total}</strong><span>ระดับที่ผ่าน</span><div role="progressbar" aria-label="ความก้าวหน้าหลักสูตร ${escapeHtml(course.shortTitle)}" aria-valuemin="0" aria-valuemax="${stats.total}" aria-valuenow="${stats.completed}" aria-valuetext="ผ่าน ${stats.completed} จาก ${stats.total} ระดับ"><i style="width:${stats.percent}%"></i></div></div></section>
-  <div class="course-map-layout">
-    <aside class="course-syllabus"><span class="eyebrow">แผนการเรียน</span>${course.units.map((unit) => {
-      const record = curriculumRecord(unit.id);
-      const unlocked = isUnitUnlocked(unit, state.curriculumProgress);
-      const passed = Number(record.bestScore || 0) >= PASSING_SCORE;
-      return `<button class="syllabus-item ${unit.id === next.id ? 'current' : ''} ${passed ? 'passed' : ''}" data-action="open-unit" data-unit="${unit.id}" ${unlocked ? '' : 'disabled'}><span>${passed ? '✓' : unlocked ? unit.level : '⌁'}</span><div><small>LEVEL ${unit.level}</small><b>${escapeHtml(unit.title)}</b><em>${unlocked ? progressLabel(record) : 'ผ่านระดับก่อนเพื่อปลดล็อก'}</em></div></button>`;
-    }).join('')}</aside>
-    <section class="course-overview"><div class="course-overview-visual"><img src="${courseGraphic(course.id)}" alt="ภาพรวมหลักสูตร ${escapeHtml(course.shortTitle)}"></div><span class="eyebrow">ระดับที่ควรเรียนต่อ</span><h2>Level ${next.level} · ${escapeHtml(next.title)}</h2><p class="course-outcome">เรียนจบแล้วคุณจะ: ${escapeHtml(next.outcome)}</p>
-      <div class="course-meta"><span>◷ ${next.minutes} นาที</span><span>▥ ${next.steps.length} ช่วงเรียน</span><span>✓ Quiz ${next.quiz.length} ข้อ</span></div>
-      <button class="primary" data-action="open-unit" data-unit="${next.id}">${curriculumRecord(next.id).status === 'not_started' ? 'เริ่มระดับนี้' : 'เรียนต่อ'} <span>→</span></button>
-      <section class="unlock-rule"><b>วิธีผ่านหลักสูตร</b><p>ทำ Quiz ได้อย่างน้อย ${PASSING_SCORE}/${next.quiz.length} เพื่อปลดล็อกระดับถัดไป คุณกลับมาทบทวนหรือทำใหม่ได้ทุกเวลา</p></section>
-    </section>
+
+  return `<div class="sp-dashboard-hub">
+    <!-- Course Header & Banner (Screen 3) -->
+    <div style="background:var(--sp-surface); border:1.5px solid var(--sp-border); border-radius:var(--sp-radius-xl); padding:24px; box-shadow:var(--sp-shadow-card); margin-bottom:24px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+        <button class="sp-search-circle-btn" style="width:36px;height:36px;min-width:36px;background:var(--sp-canvas-soft);color:var(--sp-ink);" data-screen="learn" aria-label="ย้อนกลับ">
+          ${renderIcon('back')}
+        </button>
+        <span class="sp-badge-tag" style="background:var(--sp-blue-soft);color:var(--sp-blue);">${escapeHtml(course.shortTitle)}</span>
+      </div>
+
+      <div style="display:grid; grid-template-columns: 1fr 180px; gap:20px; align-items:center;">
+        <div>
+          <h1 style="font-size:1.6rem; font-weight:800; color:var(--sp-ink); margin-bottom:8px;">${escapeHtml(course.title)}</h1>
+          <p style="color:var(--sp-ink-muted); font-size:0.9rem; margin-bottom:16px;">${escapeHtml(course.description)}</p>
+          <div style="display:flex; gap:16px; font-size:0.85rem; color:var(--sp-ink); font-weight:600;">
+            <span>⏱️ ${stats.total * 15} Mins</span>
+            <span>⭐ 4.9 (890+ Learners)</span>
+            <span>🏆 ผ่าน ${stats.completed}/${stats.total} ระดับ</span>
+          </div>
+        </div>
+        <div style="display:flex; justify-content:center; align-items:center; background:var(--sp-canvas-soft); border-radius:var(--sp-radius-md); height:120px;">
+          ${graphicCourseCardCover(course.id)}
+        </div>
+      </div>
+
+      <!-- Segmented Tabs (Screen 3) -->
+      <div class="sp-filter-bar" style="margin-top:20px; padding-top:16px; border-top:1px solid var(--sp-border);">
+        <button class="sp-filter-tab active">Lessons (${course.units.length})</button>
+        <button class="sp-filter-tab" data-screen="learning-progress">Curriculum</button>
+        <button class="sp-filter-tab" data-screen="home">Coach Kai</button>
+      </div>
+    </div>
+
+    <!-- Chapter List (Screen 3) -->
+    <div style="display:flex; flex-direction:column; gap:12px;">
+      ${course.units.map((unit, index) => {
+        const record = curriculumRecord(unit.id);
+        const unlocked = isUnitUnlocked(unit, state.curriculumProgress);
+        const passed = Number(record.bestScore || 0) >= PASSING_SCORE;
+        const isCurrent = unit.id === next.id;
+
+        return `<div class="sp-lesson-row ${isCurrent ? 'active-lesson' : ''}" style="background:var(--sp-surface); border:1.5px solid ${isCurrent ? 'var(--sp-blue)' : 'var(--sp-border)'}; border-radius:var(--sp-radius-lg); padding:16px 20px; display:flex; justify-content:space-between; align-items:center; box-shadow:var(--sp-shadow-subtle);">
+          <div style="display:flex; align-items:center; gap:16px;">
+            <span style="font-size:1.1rem; font-weight:800; color:${passed ? 'var(--sp-teal)' : isCurrent ? 'var(--sp-blue)' : 'var(--sp-ink-muted)'}; width:28px;">
+              ${String(index + 1).padStart(2, '0')}
+            </span>
+            <div>
+              <h4 style="font-size:1rem; font-weight:700; color:var(--sp-ink); margin-bottom:4px;">${escapeHtml(unit.title)}</h4>
+              <span style="font-size:0.8rem; color:var(--sp-ink-muted); font-weight:500;">
+                ${unit.minutes} Mins • Quiz ${unit.quiz.length} ข้อ ${passed ? '• ผ่านแล้ว ✨' : isCurrent ? '• ด่านปัจจุบัน' : ''}
+              </span>
+            </div>
+          </div>
+
+          <button class="sp-play-circle-btn" data-action="open-unit" data-unit="${unit.id}" ${unlocked ? '' : 'disabled'} style="width:40px; height:40px; border-radius:50%; border:none; background:${passed ? 'var(--sp-teal-soft)' : unlocked ? 'var(--sp-blue)' : '#E2E8F0'}; color:${passed ? 'var(--sp-teal)' : unlocked ? '#FFF' : '#94A3B8'}; display:flex; align-items:center; justify-content:center; cursor:${unlocked ? 'pointer' : 'not-allowed'};" aria-label="เริ่มเรียนด่าน ${unit.title}">
+            ${passed ? '✓' : unlocked ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>' : '🔒'}
+          </button>
+        </div>`;
+      }).join('')}
+    </div>
+
+    <!-- Sticky Bottom Enrollment Bar (Screen 3) -->
+    <div style="position:sticky; bottom:90px; margin-top:24px; background:var(--sp-surface); border:1.5px solid var(--sp-border); border-radius:var(--sp-radius-xl); padding:16px 24px; display:flex; justify-content:space-between; align-items:center; box-shadow:0 12px 32px rgba(15,23,42,0.12); z-index:10;">
+      <div>
+        <span style="font-size:0.75rem; font-weight:700; color:var(--sp-blue); text-transform:uppercase;">First Jobber Lab</span>
+        <div style="font-size:1.2rem; font-weight:800; color:var(--sp-ink);">Free for Beginners</div>
+      </div>
+      <button class="sp-btn-join-class" style="padding:14px 28px; font-size:0.95rem;" data-action="open-unit" data-unit="${next.id}">
+        ${curriculumRecord(next.id).status === 'not_started' ? 'Enroll / Start Level' : 'Continue Level'} →
+      </button>
+    </div>
   </div>`;
 }
 
@@ -1288,14 +1569,94 @@ function learningProgressView() {
     return memo;
   }, { completed: 0, total: 0 });
   const percent = totals.total ? Math.round((totals.completed / totals.total) * 100) : 0;
-  return `<section class="learning-progress-hero"><span class="eyebrow">LEARNING PROGRESS</span><h1>ความก้าวหน้าของคุณ</h1><p>นับเฉพาะระดับที่ทำ Quiz ผ่านแล้ว ไม่ได้นับแค่การเปิดบทเรียน</p><div class="learning-progress-score"><strong>${percent}%</strong><div><b>${totals.completed}/${totals.total} ระดับผ่านแล้ว</b><span>เกณฑ์ผ่านระดับละ ${PASSING_SCORE}/3</span></div></div></section>
-  <section class="progress-course-list">${COURSES.map((course) => {
-    const stats = courseStats(course.id, state.curriculumProgress);
-    const next = firstAvailableUnit(course);
-    const actionCount = course.units.filter((unit) => ['planned', 'evidence_recorded'].includes(normalizeLearningAction(state.learningActions?.[unit.id]).status)).length;
-    return `<article class="progress-course ${course.color}"><div class="progress-course-head"><span class="course-symbol">${courseIcon(course.id)}</span><div><span class="eyebrow">${escapeHtml(course.shortTitle)}</span><h2>${escapeHtml(course.title)}</h2><p>${stats.completed}/${stats.total} ระดับผ่านแล้ว · วาง action ${actionCount} งาน</p></div></div><div class="progress-track" role="progressbar" aria-label="ความก้าวหน้า ${escapeHtml(course.shortTitle)}" aria-valuemin="0" aria-valuemax="${stats.total}" aria-valuenow="${stats.completed}" aria-valuetext="ผ่าน ${stats.completed} จาก ${stats.total} ระดับ"><i style="width:${stats.percent}%"></i></div><div class="progress-course-foot"><span>ถัดไป: ${escapeHtml(next.title)}</span><button class="secondary" data-action="open-course" data-course="${course.id}">เปิดแผน →</button></div></article>`;
-  }).join('')}</section>
-  <section class="progress-history-link"><div><span class="eyebrow">LIFE ACTIONS</span><h2>ความคืบหน้าจากชีวิตจริง</h2><p>การติดต่อเจ้าหนี้ บันทึก Tax Lab และผลจำลองลงทุนยังอยู่ในประวัติเดิมของคุณ</p></div><button class="secondary" data-screen="history">ดูประวัติ →</button></section>`;
+
+  return `<div class="sp-dashboard-hub">
+    <!-- Learning Progress Hero Banner -->
+    <section class="sp-progress-hero-card" aria-label="ความก้าวหน้าการเรียนรู้">
+      <div class="sp-progress-hero-left">
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px; flex-wrap:wrap;">
+          <span class="sp-badge-tag" style="background:var(--sp-blue-soft);color:var(--sp-blue);font-weight:700;">LEARNING PROGRESS</span>
+          <span class="sp-badge-tag" style="background:var(--sp-gold-soft);color:#D97706;font-weight:700;">🔥 Streak 5 Days</span>
+        </div>
+        <h1>ความก้าวหน้าของคุณ</h1>
+        <p>นับเฉพาะระดับที่ทำ Quiz ผ่านแล้ว (เกณฑ์ผ่านระดับละ ${PASSING_SCORE}/3) ไม่ได้นับแค่การเปิดบทเรียน เพื่อให้มั่นใจว่านำไปตัดสินใจจริงได้</p>
+        
+        <div class="sp-progress-stats-strip">
+          <div class="sp-stat-box">
+            <span class="sp-stat-num">${percent}%</span>
+            <span class="sp-stat-label">ความสำเร็จรวม</span>
+          </div>
+          <div class="sp-stat-divider"></div>
+          <div class="sp-stat-box">
+            <span class="sp-stat-num">${totals.completed}/${totals.total}</span>
+            <span class="sp-stat-label">ระดับที่ผ่านแล้ว</span>
+          </div>
+          <div class="sp-stat-divider"></div>
+          <div class="sp-stat-box">
+            <span class="sp-stat-num">${totals.completed * 45}</span>
+            <span class="sp-stat-label">XP สะสม</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="sp-progress-hero-right">
+        <div class="sp-coach-speech-card" style="border:0; background:var(--sp-canvas-soft); padding:16px;">
+          <div class="sp-coach-mascot-wrap" style="width:76px; height:76px; min-width:76px;">
+            ${mascotSVG(percent > 50 ? 'celebrate' : 'calculate')}
+          </div>
+          <div class="sp-coach-bubble">
+            <b>โค้ชไข่ (Coach Kai):</b>
+            <p>${percent === 100 ? 'ยอดเยี่ยมมากครับ! คุณเรียนรู้และผ่านครบทั้ง 18 ระดับแล้ว 🏆' : percent > 0 ? `ยอดเยี่ยมมากครับ! ผ่านไปแล้ว ${totals.completed} ระดับ ลองลุยระดับถัดไปต่อเลย ✨` : 'เริ่มด่านแรกวันนี้เลยครับ 3-5 นาทีก็เห็นภาพการเงินชัดขึ้นทันที!'}</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3 Course Cards Section -->
+    <section aria-label="สถานะแต่ละหลักสูตร" style="margin-top: 24px;">
+      <h2 style="font-size:1.3rem; font-weight:800; color:var(--sp-ink); margin-bottom:16px;">สถานะแต่ละหลักสูตร</h2>
+      <div class="sp-course-grid" style="grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px;">
+        ${COURSES.map((course) => {
+          const stats = courseStats(course.id, state.curriculumProgress);
+          const next = firstAvailableUnit(course);
+          const actionCount = course.units.filter((unit) => ['planned', 'evidence_recorded'].includes(normalizeLearningAction(state.learningActions?.[unit.id]).status)).length;
+          return `<article class="sp-course-card" style="display:flex; flex-direction:column; justify-content:space-between;">
+            <div>
+              <div style="height:120px; border-radius:14px; overflow:hidden; margin-bottom:14px; background:var(--sp-canvas-soft); display:flex; align-items:center; justify-content:center;">
+                ${graphicCourseCardCover(course.id)}
+              </div>
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                <span class="sp-course-tag">${escapeHtml(course.shortTitle)}</span>
+                <span style="font-size:0.85rem; font-weight:700; color:var(--sp-blue);">${stats.percent}% ผ่าน</span>
+              </div>
+              <h3 style="font-size:1.15rem; font-weight:700; color:var(--sp-ink); margin-bottom:6px;">${escapeHtml(course.title)}</h3>
+              <p style="font-size:0.85rem; color:var(--sp-muted); line-height:1.4; margin-bottom:14px;">ผ่านแล้ว ${stats.completed}/${stats.total} ระดับ · วาง Action ${actionCount} งาน</p>
+            </div>
+            
+            <div>
+              <div style="height:8px; border-radius:4px; background:var(--sp-border); overflow:hidden; margin-bottom:14px;">
+                <div style="height:100%; width:${stats.percent}%; background:var(--sp-blue-gradient); border-radius:4px; transition:width 0.3s ease;"></div>
+              </div>
+              <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
+                <span style="font-size:0.8rem; color:var(--sp-muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:180px;">ด่านถัดไป: ${escapeHtml(next.title)}</span>
+                <button class="sp-btn-join-class" style="padding:8px 16px; font-size:0.85rem; white-space:nowrap;" data-action="open-course" data-course="${course.id}">เปิดแผน →</button>
+              </div>
+            </div>
+          </article>`;
+        }).join('')}
+      </div>
+    </section>
+
+    <!-- Real-life Case History Link Card -->
+    <section style="margin-top: 24px; background:var(--sp-surface); border:1.5px solid var(--sp-border); border-radius:var(--sp-radius-lg); padding:20px 24px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:16px; box-shadow:var(--sp-shadow-card);">
+      <div>
+        <span class="sp-badge-tag" style="background:var(--sp-purple-soft);color:var(--sp-purple);">LIFE ACTIONS</span>
+        <h3 style="font-size:1.1rem; font-weight:700; color:var(--sp-ink); margin:6px 0 2px 0;">ความคืบหน้าจากชีวิตจริง</h3>
+        <p style="font-size:0.85rem; color:var(--sp-muted); margin:0;">การติดต่อเจ้าหนี้ บันทึก Tax Lab และผลจำลองลงทุนยังอยู่ในประวัติเดิมของคุณ</p>
+      </div>
+      <button class="sp-btn-join-class" style="background:var(--sp-canvas-soft); color:var(--sp-ink); border:1.5px solid var(--sp-border);" data-screen="history">ดูประวัติทั้งหมด →</button>
+    </section>
+  </div>`;
 }
 
 function lessonView() {
