@@ -53,6 +53,7 @@ import {
   renderSalaryBuckets,
   renderTopBar
 } from './ui-primitives.js';
+import { mascotSVG } from './mascot.js';
 
 const STORE_KEY = 'first-jobber-debt-navigator-v1';
 const APP_SCHEMA_VERSION = ACADEMY_SCHEMA_VERSION;
@@ -625,24 +626,33 @@ function homeView() {
   const resumeLabel = resumeState.screen === 'course-lesson' && resumeRecord.status === 'not_started'
     ? completed ? 'เริ่มบทเรียนถัดไป' : 'เริ่มบทเรียนแรก'
     : academyResumeLabel(resumeState, resume);
-  const resumeTitle = resumeState.screen === 'learning-progress' ? 'ความก้าวหน้าทั้ง 3 หลักสูตร' : resume.title;
+  const resumeTitle = resumeState.screen === 'learning-progress' ? 'ความก้าหน้าทัง 3 หลักสูตร' : resume.title;
   const coursePulse = COURSES.map((course) => {
     const stats = courseStats(course.id, state.curriculumProgress);
-    return `<div class="hero-course-pulse ${course.id}"><span>${escapeHtml(course.shortTitle)}</span><div role="progressbar" aria-label="${escapeHtml(course.shortTitle)} ผ่าน ${stats.completed} จาก ${stats.total} ระดับ" aria-valuemin="0" aria-valuemax="${stats.total}" aria-valuenow="${stats.completed}"><i style="width:${stats.percent}%"></i></div><b>${stats.completed}/${stats.total}</b></div>`;
+    return `<div class="mc-progress-item ${course.id}"><span>${escapeHtml(course.shortTitle)}</span><div role="progressbar" aria-label="${escapeHtml(course.shortTitle)} ผ่าน ${stats.completed} จาก ${stats.total} ระดับ" aria-valuemin="0" aria-valuemax="${stats.total}" aria-valuenow="${stats.completed}"><i style="width:${stats.percent}%"></i></div><b>${stats.completed}/${stats.total}</b></div>`;
   }).join('');
-  const nextNote = resumeState.screen === 'course-action' ? 'คุณผ่าน Quiz แล้ว เหลือเลือกงานจริงหนึ่งอย่างก่อนไปต่อ' : resumeState.screen === 'lesson-reflection' ? 'คุณผ่าน Quiz แล้ว เหลือสรุปสิ่งที่เข้าใจและเลือกก้าวต่อไป' : resumeRecord.status === 'not_started' ? 'เรียนหนึ่งแนวคิด แล้วทดลองกับสถานการณ์จำลองที่เกี่ยวข้อง' : 'กลับมาต่อจากจุดที่ค้างไว้ได้ทันที';
-  return `<section class="fj-hero">
-    <div class="fj-hero-copy"><span class="eyebrow">FIRST JOBBER MONEY LAB</span><h1>เข้าใจเงิน<br>จากการลองจริง</h1><p>เรียนภาษี การลงทุน และหนี้ผ่านบทเรียนสั้น เครื่องมือจำลอง และคำอธิบายที่พาคุณตัดสินใจได้เอง</p><div class="hero-actions"><button class="primary" data-action="resume-learning">${escapeHtml(resumeLabel)} ${renderIcon('arrow')}</button><button class="secondary" data-screen="learn">ดูหลักสูตรทั้งหมด</button></div></div>
-    <aside class="hero-learning-board" aria-label="ภาพรวมการเรียน"><div class="board-head"><div><span>LEARNING RUNWAY</span><b>ผ่านแล้ว ${completed} จาก 18 ระดับ</b></div><strong>${Math.round((completed / 18) * 100)}%</strong></div>${coursePulse}<div class="learning-loop"><span><b>1</b>เรียน</span>${renderIcon('arrow')}<span><b>2</b>ทดลอง</span>${renderIcon('arrow')}<span><b>3</b>ตัดสินใจ</span></div></aside>
+  const nextNote = resumeState.screen === 'course-action' ? 'คุณผ่าน Quiz แล้ว เหลือเลือกงานจริงหนึงอย่างก่อนไปต่อ' : resumeState.screen === 'lesson-reflection' ? 'คุณผ่าน Quiz แล้ว เหลือสรุปสิ่งที่เข้าใจและเลือกก้าวต่อไป' : resumeRecord.status === 'not_started' ? 'เรียนหนึงแนวคิด แล้วทดลองกับสถานการณ์จำลองที่เกี่ยวข้อง' : 'กลับมาต่อจากจุดที่ค้างไว้ได้ทันที';
+  return `<section class="mc-hero">
+    <div class="mc-hero-mascot">${mascotSVG('point')}</div>
+    <div class="mc-hero-copy"><span class="eyebrow">FIRST JOBBER MONEY LAB</span><h1>เข้าใจเงิน<br>จากการลองจริง</h1><p>เรียนภาษี การลงทุน และหนี้ผ่านบทเรียนสั้น เครื่องมือจำลอง และคำอธิบายที่พาคุณตัดสินใจได้เอง</p><div class="hero-actions"><button class="primary" data-action="resume-learning">${escapeHtml(resumeLabel)} ${renderIcon('arrow')}</button><button class="secondary" data-screen="learn">ดูหลักสูตรทั้งหมด</button></div></div>
   </section>
-  <section class="fj-next-action" aria-label="สิ่งที่ควรทำต่อ"><div class="next-index"><span>01</span>${renderIcon('learn')}</div><div><span class="eyebrow">ทำต่อจากตรงนี้</span><h2>${escapeHtml(resumeTitle)}</h2><p>${escapeHtml(nextNote)}</p><small>ประมาณ ${resume.minutes} นาที · มีตัวอย่าง แบบฝึก และ Quiz</small></div><button class="primary" data-action="resume-learning">${escapeHtml(resumeLabel)} ${renderIcon('arrow')}</button></section>
-  <section class="fj-section-head"><div><span class="eyebrow">DECISION LABS</span><h2>ลองโลกการเงินจริง โดยไม่ใช้เงินจริง</h2></div><p>แต่ละ Lab แสดงสมมติฐาน วิธีคำนวณ และสิ่งที่ควรตรวจเพิ่มก่อนนำไปใช้จริง</p></section>
-  <section class="fj-lab-grid">
-    <article class="fj-lab-card tax"><div class="lab-card-top"><span class="lab-card-icon">${renderIcon('tax')}</span><span class="lab-state">${escapeHtml(taxStatus)}</span></div><span class="eyebrow">TAX YEAR LAB</span><h2>เห็นภาษีทั้งปีก่อนยื่น</h2><p>กระทบยอดภาษีที่ถูกหัก และเห็นเงินที่ควรกันต่อเดือนพร้อมที่มาของตัวเลข</p><div class="mini-waterfall" aria-hidden="true"><i></i><i></i><i></i><i></i></div><button class="secondary" data-screen="tax-lab">เปิด Tax Lab ${renderIcon('arrow')}</button></article>
-    <article class="fj-lab-card investing"><div class="lab-card-top"><span class="lab-card-icon">${renderIcon('invest')}</span><span class="lab-state">${game ? `ไตรมาส ${game.round}/12` : 'ยังไม่เริ่ม mandate'}</span></div><span class="eyebrow">INVESTMENT SIMULATOR</span><h2>บริหารพอร์ต ไม่ใช่ทายราคา</h2><p>จัดสรร 6 สินทรัพย์ ตัดสินใจ 12 ไตรมาส และตรวจ drawdown, FX, inflation กับ fees</p><div class="mini-chart" aria-hidden="true"><svg viewBox="0 0 240 52"><path d="M2 43 36 31 72 36 108 17 144 25 180 8 238 14"/><path class="guide" d="M2 43H238"/></svg></div><button class="secondary" data-screen="invest-sim">เปิด Investment Lab ${renderIcon('arrow')}</button></article>
-    <article class="fj-lab-card debt"><div class="lab-card-top"><span class="lab-card-icon">${renderIcon('debt')}</span><span class="lab-state">ยอดที่รายงาน ${total}</span></div><span class="eyebrow">DEBT NAVIGATOR</span><h2>เปลี่ยนข้อมูลหนี้เป็นทางออก</h2><p>${meta ? escapeHtml(meta.title) : 'คัด route เตรียมคำพูด และเก็บหลักฐานการติดต่อเจ้าหนี้ตามสถานะจริง'}</p><div class="mini-route" aria-hidden="true"><i></i><i></i><i></i><i></i></div><button class="secondary" data-screen="${meta ? 'diagnosis' : 'consent'}">${meta ? 'ดู Action Pack' : 'เริ่ม Route Check'} ${renderIcon('arrow')}</button></article>
+  <section class="mc-runway" aria-label="ภาพรวมการเรียน">
+    <div class="mc-runway-head"><span class="mc-plaid-strip"></span><div><span class="eyebrow">LEARNING RUNWAY</span><b>ผ่านแล้ว ${completed} จาก 18 ระดับ</b></div><strong>${Math.round((completed / 18) * 100)}%</strong></div>
+    <div class="mc-runway-body"><div class="mc-runway-mascot">${mascotSVG('study')}</div><div class="mc-progress-list">${coursePulse}</div></div>
+    <div class="mc-learning-loop"><span><b>1</b>เรียน</span>${renderIcon('arrow')}<span><b>2</b>ทดลอง</span>${renderIcon('arrow')}<span><b>3</b>ตัดสินใจ</span></div>
   </section>
-  <section class="fj-trust-strip"><span>${renderIcon('shield')}</span><div><b>พื้นที่ซ้อมตัดสินใจ</b><p>ไม่เชื่อมบัญชีลงทุนหรือส่งคำสั่งเงินจริง เนื้อหาสำคัญมีแหล่งข้อมูลและวันที่ทบทวน</p></div><button class="text-action" data-screen="data">ดูการใช้ข้อมูล</button></section>`;
+  <section class="mc-next-action" aria-label="สิ่งที่ควรทำต่อ">
+    <div class="mc-next-mascot">${mascotSVG('celebrate')}</div>
+    <div class="mc-next-content"><span class="eyebrow">ทำต่อจากตรงนี้</span><h2>${escapeHtml(resumeTitle)}</h2><p>${escapeHtml(nextNote)}</p><small>ประมาณ ${resume.minutes} นาที · มีตัวอย่าง แบบฝึก และ Quiz</small></div>
+    <button class="primary" data-action="resume-learning">${escapeHtml(resumeLabel)} ${renderIcon('arrow')}</button>
+  </section>
+  <section class="mc-section-head"><span class="mc-plaid-strip"></span><div><span class="eyebrow">DECISION LABS</span><h2>ลองโลกการเงินจริง โดยไม่ใช้เงินจริง</h2></div><p>แต่ละ Lab แสดงสมมติฐาน วิธีคำนวณ และสิ่งที่ควรตรวจเพิ่มก่อนนำไปใช้จริง</p></section>
+  <section class="mc-lab-grid">
+    <article class="mc-lab-card tax"><div class="mc-lab-mascot">${mascotSVG('calculate')}</div><div class="mc-lab-body"><div class="mc-lab-top"><span class="eyebrow">TAX YEAR LAB</span><span class="mc-lab-state">${escapeHtml(taxStatus)}</span></div><h2>เห็นภาษีทั้งปีก่อนยื่น</h2><p>กระทบยอดภาษีที่ถูกหัก และเห็นเงินที่ควรกันต่อเดือนพร้อมที่มาของตัวเลข</p><div class="mini-waterfall" aria-hidden="true"><i></i><i></i><i></i><i></i></div><button class="secondary" data-screen="tax-lab">เปิด Tax Lab ${renderIcon('arrow')}</button></div></article>
+    <article class="mc-lab-card investing"><div class="mc-lab-mascot">${mascotSVG('invest')}</div><div class="mc-lab-body"><div class="mc-lab-top"><span class="eyebrow">INVESTMENT SIMULATOR</span><span class="mc-lab-state">${game ? `ไตรมาส ${game.round}/12` : 'ยังไม่เริ่ม mandate'}</span></div><h2>บริหารพอร์ต ไม่ใช่ทายราคา</h2><p>จัดสรร 6 สินทรัพย์ ตัดสินใจ 12 ไตรมาส และตรวจ drawdown, FX, inflation กับ fees</p><div class="mini-chart" aria-hidden="true"><svg viewBox="0 0 240 52"><path d="M2 43 36 31 72 36 108 17 144 25 180 8 238 14"/><path class="guide" d="M2 43H238"/></svg></div><button class="secondary" data-screen="invest-sim">เปิด Investment Lab ${renderIcon('arrow')}</button></div></article>
+    <article class="mc-lab-card debt"><div class="mc-lab-mascot">${mascotSVG('run')}</div><div class="mc-lab-body"><div class="mc-lab-top"><span class="eyebrow">DEBT NAVIGATOR</span><span class="mc-lab-state">ยอดที่รายงาน ${total}</span></div><h2>เปลี่ยนข้อมูลหนี้เป็นทางออก</h2><p>${meta ? escapeHtml(meta.title) : 'คัด route เตรียมคำพูด และเก็บหลักฐานการติดต่อเจ้าหนี้ตามสถานะจริง'}</p><div class="mini-route" aria-hidden="true"><i></i><i></i><i></i><i></i></div><button class="secondary" data-screen="${meta ? 'diagnosis' : 'consent'}">${meta ? 'ดู Action Pack' : 'เริ่ม Route Check'} ${renderIcon('arrow')}</button></div></article>
+  </section>
+  <section class="mc-trust-strip"><span>${renderIcon('shield')}</span><div><b>พื้นที่ซ้อมตัดสินใจ</b><p>ไม่เชื่อมบัญชีลงทุนหรือส่งคำสั่งเงินจริง เนื้อหาสำคัญมีแหล่งข้อมูลและวันที่ทบทวน</p></div><button class="text-action" data-screen="data">ดูการใช้ข้อมูล</button></section>`;
 }
 
 const taxMoney = (value) => String(value ?? '').trim() ? parseBaht(value) : 0n;

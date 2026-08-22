@@ -12,7 +12,8 @@ const ICON_PATHS = Object.freeze({
   arrow: '<path d="M5 12h14"/><path d="m14 7 5 5-5 5"/>',
   tax: '<path d="M7 3h10l3 3v15H4V3z"/><path d="M8 9h8M8 13h8M8 17h5"/>',
   invest: '<path d="M4 19V5"/><path d="M4 19h16"/><path d="m7 15 4-4 3 2 5-6"/>',
-  shield: '<path d="M12 3 4.5 6v5c0 4.8 3.1 8.4 7.5 10 4.4-1.6 7.5-5.2 7.5-10V6z"/><path d="m9 12 2 2 4-5"/>'
+  shield: '<path d="M12 3 4.5 6v5c0 4.8 3.1 8.4 7.5 10 4.4-1.6 7.5-5.2 7.5-10V6z"/><path d="m9 12 2 2 4-5"/>',
+  labs: '<path d="M9 3h6M10 3v6L5.5 18a2 2 0 0 0 1.8 3h9.4a2 2 0 0 0 1.8-3L14 9V3"/><path d="M7.5 14h9"/>'
 });
 
 export function renderIcon(name, className = '') {
@@ -110,7 +111,7 @@ export function renderTopBar({ screen }) {
 const NAV_ITEMS = [
   ['home', 'home', 'home', 'วันนี้', 'ภาพรวมและสิ่งที่ควรทำต่อ'],
   ['learn', 'learn', 'learn', 'เรียน', 'บทเรียน ภาษี ลงทุน และหนี้'],
-  ['portfolio', 'portfolio', 'debt', 'แผนหนี้', 'บัญชีหนี้และทางเลือก'],
+  ['portfolio', 'portfolio', 'labs', 'ห้องทดลอง', 'ทดลองภาษี ลงทุน และหนี้'],
   ['learning-progress', 'learning-progress', 'progress', 'ความก้าวหน้า', 'คะแนนและงานที่ลงมือทำ']
 ];
 
