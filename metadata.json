@@ -1,0 +1,8 @@
+{
+  "name": "First Jobber Money Lab",
+  "description": "Financial literacy learning app for Thai first-jobbers with interactive tax, investment, and debt management labs",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
