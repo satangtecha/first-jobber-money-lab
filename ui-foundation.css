@@ -1,0 +1,82 @@
+:root {
+  --color-canvas: #f5f7f5;
+  --color-surface: #fff;
+  --color-ink: #182a39;
+  --color-muted: #607080;
+  --color-line: #dce4e0;
+  --color-brand: #147a69;
+  --color-brand-deep: #07584d;
+  --color-brand-soft: #dff4ec;
+  --color-warning: #a96109;
+  --color-warning-soft: #fff2d9;
+  --color-danger: #b64735;
+  --color-danger-soft: #fff0ec;
+  --color-navy: #102d3e;
+  --color-focus: #185dff;
+
+  --font-body: Inter, "Noto Sans Thai", system-ui, sans-serif;
+  --line-height-body: 1.55;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+  --radius-sm: 12px;
+  --radius-md: 16px;
+  --radius-lg: 24px;
+  --shadow-subtle: 0 8px 30px #203a2910;
+  --shadow-raised: 0 16px 40px #0c283720;
+  --motion-fast: 150ms;
+  --motion-standard: 220ms;
+
+  /* Backward-compatible aliases consumed by the existing screens. */
+  --ink: var(--color-ink);
+  --muted: var(--color-muted);
+  --paper: var(--color-surface);
+  --line: var(--color-line);
+  --teal: var(--color-brand);
+  --teal-deep: var(--color-brand-deep);
+  --teal-soft: var(--color-brand-soft);
+  --amber: var(--color-warning);
+  --amber-soft: var(--color-warning-soft);
+  --danger: var(--color-danger);
+  --danger-soft: var(--color-danger-soft);
+  --navy: var(--color-navy);
+  --focus: var(--color-focus);
+}
+
+/* Shared component contract. Screen-specific layout remains in navigator.css. */
+:where(.card, .input-card, .route-choice, .home-resume-card, .progress-course-card) {
+  --ui-surface: var(--color-surface);
+  --ui-border: var(--color-line);
+  --ui-radius: var(--radius-md);
+}
+
+:where(button, input, textarea, select, a) {
+  -webkit-tap-highlight-color: transparent;
+}
+
+:where(button, input, textarea, select, a):focus-visible {
+  outline-color: var(--color-focus);
+}
+
+/* Keep the fixed navigation clear of device safe areas and reachable content. */
+.shell {
+  padding-bottom: calc(6rem + env(safe-area-inset-bottom, 0px));
+}
+
+.bottom-nav {
+  height: calc(66px + env(safe-area-inset-bottom, 0px));
+  padding-bottom: calc(.35rem + env(safe-area-inset-bottom, 0px));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

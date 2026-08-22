@@ -3,6 +3,13 @@ import { routeDebt, cashBeforeDebt, ROUTES, DEBT_ENGINE_VERSION } from './debt-e
 import { comparePayoffScenarios, PayoffEngineError } from './payoff-engine.js';
 import { LEARNING_UNITS, unitsForRoute } from './learning-content.js';
 import { COURSES, PASSING_SCORE, courseById, courseStats, isUnitUnlocked, unitById } from './curriculum.js';
+import {
+  ACADEMY_SCHEMA_VERSION,
+  academyResumeLabel,
+  migrateAcademyStateV9,
+  normalizeLearningAction,
+  resolveAcademyResume
+} from './academy-state.js';
 import { calculateThaiPIT2026, TaxLabError } from './tax-lab.js';
 import {
   advanceInvestmentSimulation,
@@ -22,10 +29,34 @@ import {
   InvestmentSimError
 } from './investment-sim.js';
 import { createDebtAction, createDebtAssessment, deleteDebtAssessment, getSessionUser, listDebtAssessments, requestMagicLink } from './api-client.js';
+import {
+  EVIDENCE_BY_TASK,
+  PILOT_TASKS,
+  addPilotEvidence,
+  buildPilotExport,
+  createPilotSession,
+  finishPilotSession,
+  normalizePilotSession,
+  scorePilotTask,
+  startPilotTask
+} from './pilot-mode.js';
+import {
+  escapeHtml,
+  renderBottomNav,
+  renderCockpitIllustration,
+  renderErrorPanel,
+  renderIcon,
+  renderInputCard,
+  renderLabJourney,
+  renderProgressHeader,
+  renderRouteChoice,
+  renderSalaryBuckets,
+  renderTopBar
+} from './ui-primitives.js';
 
 const STORE_KEY = 'first-jobber-debt-navigator-v1';
-const APP_SCHEMA_VERSION = 7;
-const SENSITIVE_SCREENS = new Set(['intake-money', 'intake-status', 'intake-details', 'diagnosis', 'action-plan', 'portfolio', 'debt-editor', 'payoff', 'reminders', 'tax-lab', 'invest-sim', 'learn', 'course', 'course-lesson', 'course-quiz', 'lesson', 'history']);
+const APP_SCHEMA_VERSION = ACADEMY_SCHEMA_VERSION;
+const SENSITIVE_SCREENS = new Set(['intake-money', 'intake-status', 'intake-details', 'diagnosis', 'action-plan', 'portfolio', 'debt-editor', 'payoff', 'reminders', 'tax-lab', 'invest-sim', 'lesson', 'history']);
 const app = document.querySelector('#app');
 const today = () => new Intl.DateTimeFormat('en-CA', {
   timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit'
@@ -57,6 +88,10 @@ const initialState = () => ({
   quizAnswers: {},
   quizSubmitted: false,
   curriculumProgress: {},
+  lessonReflections: {},
+  learningActions: {},
+  learningResume: { kind: 'canonical', unitId: 'tax-l0', screen: 'course-lesson', step: 0 },
+  legacyLessonProgress: {},
   taxLab: {
     monthlySalary: '30000', salaryMonths: '12', bonus: '', otherNetIncome: '', withholding: '',
     socialSecurity: '10500', providentFund: '', otherAllowances: '', monthsRemaining: String(remainingTaxMonths()), calculated: false
@@ -84,6 +119,7 @@ const initialState = () => ({
   reminderDraft: emptyReminderDraft(),
   mastery: {},
   pilotEvents: [],
+  pilotSession: null,
   lastVisitDate: '',
   input: {
     monthlyTakeHome: '',
@@ -162,17 +198,21 @@ const load = () => {
       loaded.investmentDecision = fresh.investmentDecision;
       loaded.notice = 'Investment Lab อัปเกรดเป็น Investment Committee แล้ว เริ่ม mandate ใหม่เพื่อใช้โมเดล 6 สินทรัพย์';
     }
+    if (priorVersion < 8) {
+      loaded.lessonReflections = {};
+    }
     loaded.input.legalStage = effectiveLegalStage(loaded.input.legalStages);
     if (!loaded.input.creditorChoice && loaded.input.creditorName) {
       loaded.input.creditorChoice = 'other';
     }
-    loaded.schemaVersion = APP_SCHEMA_VERSION;
     loaded.debtDraft = { ...emptyDebtDraft(), ...(loaded.debtDraft || {}) };
     loaded.reminderDraft = { ...emptyReminderDraft(), ...(loaded.reminderDraft || {}) };
     loaded.mastery = Object.fromEntries(Object.entries(loaded.mastery || {}).map(([id,value])=>[id,['mastered','verified'].includes(value)?'evidence_recorded':value]));
     loaded.curriculumProgress = loaded.curriculumProgress && typeof loaded.curriculumProgress === 'object' ? loaded.curriculumProgress : {};
     loaded.practiceAnswers = loaded.practiceAnswers && typeof loaded.practiceAnswers === 'object' ? loaded.practiceAnswers : {};
     loaded.quizAnswers = loaded.quizAnswers && typeof loaded.quizAnswers === 'object' ? loaded.quizAnswers : {};
+    loaded.lessonReflections = loaded.lessonReflections && typeof loaded.lessonReflections === 'object' ? loaded.lessonReflections : {};
+    loaded.pilotSession = normalizePilotSession(loaded.pilotSession);
     loaded.taxLab = { ...fresh.taxLab, ...(loaded.taxLab || {}) };
     loaded.investmentSetup = {
       ...fresh.investmentSetup,
@@ -185,6 +225,7 @@ const load = () => {
       allocation: { ...fresh.investmentDecision.allocation, ...(loaded.investmentDecision?.allocation || {}) }
     };
     if (loaded.investmentGame?.engine_version !== INVESTMENT_SIM_VERSION) loaded.investmentGame = null;
+    Object.assign(loaded, migrateAcademyStateV9(loaded));
     if (!loaded.consent && SENSITIVE_SCREENS.has(loaded.screen)) loaded.screen = 'consent';
     return loaded;
   } catch {
@@ -193,12 +234,70 @@ const load = () => {
 };
 
 let state = load();
+const pilotRequested = new URLSearchParams(location.search).get('pilot') === '1';
+if (pilotRequested && !state.pilotSession?.finished_at) state.screen = 'pilot';
 let currentUser = null;
 let sessionChecked = false;
 const LOCAL_ONLY_DISTRIBUTION = location.hostname.endsWith('.github.io') || (location.hostname === 'localhost' && location.protocol === 'https:');
 let authEmailDraft = '';
+let pilotConsentDraft = false;
 let pendingFocusTarget = null;
+let lastRenderedScreen = null;
+
+function focusIdentity(element) {
+  if (!element || !app.contains(element)) return null;
+  if (element.id) return { id: element.id };
+  const data = element.dataset || {};
+  if (data.action || data.screen) return {
+    dataset: Object.fromEntries(Object.entries(data).sort(([left], [right]) => left.localeCompare(right)))
+  };
+  if (element.name) return { name: element.name, value: element.value || '' };
+  return null;
+}
+
+function findFocusIdentity(identity) {
+  if (!identity) return null;
+  if (identity.id) return document.getElementById(identity.id);
+  if (identity.dataset) return [...app.querySelectorAll('[data-action],[data-screen]')].find((element) =>
+    Object.entries(identity.dataset).every(([key, value]) => (element.dataset[key] || '') === value)
+  ) || null;
+  if (identity.name) return [...app.querySelectorAll('[name]')].find((element) => element.name === identity.name && element.value === identity.value) || null;
+  return null;
+}
 const save = () => localStorage.setItem(STORE_KEY, JSON.stringify(state));
+function pilotSession() { return normalizePilotSession(state.pilotSession); }
+function addPilotAutoEvidence(name) {
+  const session = pilotSession();
+  if (!session || session.finished_at) return;
+  let next = session;
+  for (const [taskId, names] of Object.entries(EVIDENCE_BY_TASK)) {
+    if (names.has(name)) next = addPilotEvidence(next, taskId, name);
+  }
+  state.pilotSession = next;
+}
+function pilotProgress(session = pilotSession()) {
+  const tasks = Object.values(session?.tasks || {});
+  return { finished: tasks.filter((task) => ['completed', 'blocked'].includes(task.status)).length, total: PILOT_TASKS.length };
+}
+function downloadPilotExport() {
+  const session = pilotSession();
+  if (!session?.finished_at) {
+    state.notice = 'บันทึกผลให้ครบทั้ง 5 งานก่อนดาวน์โหลด pilot export';
+    return;
+  }
+  const exportValue = buildPilotExport(session);
+  if (!exportValue) {
+    state.notice = 'สร้าง pilot export ไม่สำเร็จ กรุณาตรวจ consent และลองใหม่';
+    return;
+  }
+  const blob = new Blob([JSON.stringify(exportValue, null, 2)], { type: 'application/json' });
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = `first-jobber-pilot-${exportValue.participant_code}.json`;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 0);
+  state.notice = 'ดาวน์โหลด pilot export ที่ไม่มีข้อมูลการเงินหรือข้อความส่วนตัวแล้ว';
+}
 const PILOT_EVENTS = new Set(['route_completed','action_pack_opened','outcome_recorded','payoff_compared','snapshot_recorded','lesson_evidence_recorded','reminder_completed','next_cycle_return']);
 function trackPilot(name, properties = {}) {
   if (!PILOT_EVENTS.has(name)) return;
@@ -209,10 +308,6 @@ function trackPilot(name, properties = {}) {
 if (state.lastVisitDate && state.lastVisitDate !== today()) trackPilot('next_cycle_return');
 state.lastVisitDate = today();
 save();
-const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({
-  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-})[char]);
-
 const ROUTE_META = {
   [ROUTES.ENFORCEMENT_MEDIATION]: {
     tone: 'danger',
@@ -464,29 +559,15 @@ function inputField(name, label, options = {}) {
   const value = state.input[name] ?? '';
   const tone = options.tone || FIELD_TONES[name] || '';
   const inputMode = options.inputMode || (MONEY_INPUT_FIELDS.has(name) ? 'decimal' : 'text');
-  return `<label class="input-card ${tone ? `tone-${tone}` : ''}" for="${name}" data-field-anchor="${name}">
-    <span>${escapeHtml(label)}</span>
-    ${options.hint ? `<small>${escapeHtml(options.hint)}</small>` : ''}
-    <input id="${name}" name="${name}" type="${type}" value="${escapeHtml(value)}"
-      ${type === 'text' ? `inputmode="${inputMode}"` : ''}
-      ${options.placeholder ? `placeholder="${escapeHtml(options.placeholder)}"` : ''}>
-  </label>`;
+  return renderInputCard({ name, label, value, type, tone, inputMode, hint: options.hint, placeholder: options.placeholder });
 }
 
 function radioCard(name, value, title, note, selected) {
-  return `<label class="route-choice ${selected ? 'selected' : ''}">
-    <input type="radio" name="${name}" value="${value}" ${selected ? 'checked' : ''}>
-    <span class="route-check" aria-hidden="true">${selected ? '✓' : ''}</span>
-    <span><b>${escapeHtml(title)}</b>${note ? `<small>${escapeHtml(note)}</small>` : ''}</span>
-  </label>`;
+  return renderRouteChoice({ kind: 'radio', name, value, title, note, selected });
 }
 
 function checkboxCard(name, value, title, selected) {
-  return `<label class="route-choice ${selected ? 'selected' : ''}">
-    <input type="checkbox" name="${name}" value="${value}" ${selected ? 'checked' : ''}>
-    <span class="route-check" aria-hidden="true">${selected ? '✓' : ''}</span>
-    <span><b>${escapeHtml(title)}</b></span>
-  </label>`;
+  return renderRouteChoice({ kind: 'checkbox', name, value, title, selected });
 }
 
 function creditorPicker() {
@@ -504,43 +585,26 @@ function creditorPicker() {
 }
 
 function progressHeader(step, title, note) {
-  return `<section class="wizard-heading">
-    <span class="eyebrow">ROUTE CHECK · ${step}/3</span>
-    <div class="step-track" aria-label="ขั้นที่ ${step} จาก 3"><i style="width:${step * 33.34}%"></i></div>
-    <h1>${escapeHtml(title)}</h1><p>${escapeHtml(note)}</p>
-  </section>`;
+  return renderProgressHeader({ step, total: 3, title, note });
 }
 
 function cockpitIllustration() {
-  return `<svg class="hero-illustration" viewBox="0 0 420 280" role="img" aria-label="ภาพแผนที่หนี้และเส้นทางแก้ไข">
-    <defs><linearGradient id="g" x1="0" x2="1"><stop stop-color="#61c8aa"/><stop offset="1" stop-color="#8ea8ff"/></linearGradient></defs>
-    <rect x="38" y="30" width="344" height="210" rx="38" fill="#102d3e"/>
-    <path d="M76 182 C128 122 164 214 214 145 S305 73 349 104" fill="none" stroke="url(#g)" stroke-width="12" stroke-linecap="round"/>
-    <circle cx="77" cy="182" r="19" fill="#fff"/><circle cx="214" cy="145" r="19" fill="#fff"/><circle cx="349" cy="104" r="19" fill="#fff"/>
-    <rect x="82" y="55" width="105" height="17" rx="8" fill="#ffffff35"/><rect x="82" y="82" width="70" height="10" rx="5" fill="#ffffff22"/>
-    <rect x="270" y="170" width="70" height="45" rx="14" fill="#fff"/><path d="M286 193l11 10 24-28" fill="none" stroke="#147a69" stroke-width="8" stroke-linecap="round"/>
-  </svg>`;
+  return renderCockpitIllustration();
 }
 
 function topBar() {
-  return `<header class="top">
-    <button class="icon-button" data-action="back" aria-label="ย้อนกลับ" ${state.screen === 'home' ? 'disabled' : ''}>‹</button>
-    <button class="brand" data-screen="home"><span class="brand-mark">F</span> First Jobber</button>
-    <button class="icon-button" data-screen="data" aria-label="ข้อมูลและความเป็นส่วนตัว">⋯</button>
-  </header>`;
+  return renderTopBar({ screen: state.screen });
 }
 
 function bottomNav() {
-  const items = [
-    ['home', 'home', '⌂', 'วันนี้'],
-    ['portfolio', state.consent ? 'portfolio' : 'consent', '◇', 'แผนหนี้'],
-    ['learn', state.consent ? 'learn' : 'consent', '▤', 'เรียน'],
-    ['history', state.consent ? 'history' : 'consent', '↗', 'ประวัติ']
-  ];
-  const learningScreens = new Set(['learn', 'course', 'course-lesson', 'course-quiz', 'lesson', 'tax-lab', 'invest-sim']);
-  return `<nav class="bottom-nav" aria-label="เมนูหลัก">${items.map(([key, screen, icon, label]) =>
-    `<button class="nav-item ${(state.screen === key || (key === 'learn' && learningScreens.has(state.screen))) ? 'active' : ''}" data-screen="${screen}"><span>${icon}</span>${label}</button>`
-  ).join('')}</nav>`;
+  return renderBottomNav({ screen: state.screen, consent: state.consent });
+}
+
+function pilotReturnDock() {
+  const session = pilotSession();
+  if (!session || session.finished_at || state.screen === 'pilot') return '';
+  const progress = pilotProgress(session);
+  return `<aside class="pilot-return-dock" aria-label="Pilot task ที่กำลังทำ"><span><b>Pilot ${progress.finished}/${progress.total}</b><small>กลับไปบันทึกผลหรือเริ่มงานถัดไป</small></span><button class="secondary" data-screen="pilot">กลับ Pilot</button></aside>`;
 }
 
 function homeView() {
@@ -554,13 +618,31 @@ function homeView() {
     try { const tax = currentTaxEstimate(); taxStatus = tax.reconciliation_satang > 0n ? `คาดว่าต้องเตรียม ${formatBaht(tax.reconciliation_satang)}` : `คาดว่าเครดิตเหลือ ${formatBaht(-tax.reconciliation_satang)}`; } catch { taxStatus = 'ข้อมูลภาษีต้องตรวจใหม่'; }
   }
   const game = state.investmentGame;
-  return `<section class="money-home-hero"><div><span class="eyebrow">FIRST JOBBER MONEY LAB</span><h1>ลองตัดสินใจก่อนใช้เงินจริง</h1><p>เรียนภาษี ลงทุน และจัดการหนี้ผ่านเครื่องมือจำลองที่อธิบายว่าตัวเลขเปลี่ยนเพราะอะไร</p><button class="primary hero-cta" data-screen="learn">เปิดแผนการเรียน <span>→</span></button></div><div class="money-orbit" aria-hidden="true"><i>฿</i><i>↗</i><i>≋</i><strong>F</strong></div></section>
-  <section class="money-tools-grid">
-    <article class="money-tool-card tax"><span class="tool-number">01</span><div class="tool-icon">฿</div><span class="eyebrow">TAX YEAR LAB</span><h2>เห็นภาษีทั้งปีก่อนยื่น</h2><p>คำนวณแบบขั้นบันได กระทบยอดภาษีที่ถูกหัก และแบ่งเงินที่ต้องกันต่อเดือน</p><strong>${escapeHtml(taxStatus)}</strong><button class="secondary" data-screen="tax-lab">เปิด Tax Lab →</button></article>
-    <article class="money-tool-card investing"><span class="tool-number">02</span><div class="tool-icon">↗</div><span class="eyebrow">INVESTMENT COMMITTEE</span><h2>บริหาร 6 สินทรัพย์ผ่าน 12 ไตรมาส</h2><p>กำหนด mandate จัดสรรพอร์ต ส่งคำสั่งจริงในเกม และตรวจ FX, inflation, fees, turnover, drawdown กับ counterfactual</p><strong>${game ? `เดินถึงไตรมาส ${game.round}/12` : 'ยังไม่ได้สร้าง investment mandate'}</strong><button class="secondary" data-screen="invest-sim">เปิด Investment Lab →</button></article>
-    <article class="money-tool-card debt"><span class="tool-number">03</span><div class="tool-icon">≋</div><span class="eyebrow">DEBT NAVIGATOR</span><h2>รู้ทางแก้หนี้ตามสถานะจริง</h2><p>${meta ? escapeHtml(meta.title) : 'คัด route เตรียมคำพูด และเก็บหลักฐานการติดต่อเจ้าหนี้'}</p><strong>ยอดที่รายงาน ${total}</strong><button class="secondary" data-screen="${meta ? 'diagnosis' : 'consent'}">${meta ? 'ดู Action Pack' : 'เริ่ม Route Check'} →</button></article>
+  const completed = COURSES.reduce((sum, course) => sum + courseStats(course.id, state.curriculumProgress).completed, 0);
+  const resumeState = academyResume();
+  const resume = unitById(resumeState.unitId) || firstAvailableUnit(courseById(state.selectedCourse));
+  const resumeRecord = curriculumRecord(resume.id);
+  const resumeLabel = resumeState.screen === 'course-lesson' && resumeRecord.status === 'not_started'
+    ? completed ? 'เริ่มบทเรียนถัดไป' : 'เริ่มบทเรียนแรก'
+    : academyResumeLabel(resumeState, resume);
+  const resumeTitle = resumeState.screen === 'learning-progress' ? 'ความก้าวหน้าทั้ง 3 หลักสูตร' : resume.title;
+  const coursePulse = COURSES.map((course) => {
+    const stats = courseStats(course.id, state.curriculumProgress);
+    return `<div class="hero-course-pulse ${course.id}"><span>${escapeHtml(course.shortTitle)}</span><div role="progressbar" aria-label="${escapeHtml(course.shortTitle)} ผ่าน ${stats.completed} จาก ${stats.total} ระดับ" aria-valuemin="0" aria-valuemax="${stats.total}" aria-valuenow="${stats.completed}"><i style="width:${stats.percent}%"></i></div><b>${stats.completed}/${stats.total}</b></div>`;
+  }).join('');
+  const nextNote = resumeState.screen === 'course-action' ? 'คุณผ่าน Quiz แล้ว เหลือเลือกงานจริงหนึ่งอย่างก่อนไปต่อ' : resumeState.screen === 'lesson-reflection' ? 'คุณผ่าน Quiz แล้ว เหลือสรุปสิ่งที่เข้าใจและเลือกก้าวต่อไป' : resumeRecord.status === 'not_started' ? 'เรียนหนึ่งแนวคิด แล้วทดลองกับสถานการณ์จำลองที่เกี่ยวข้อง' : 'กลับมาต่อจากจุดที่ค้างไว้ได้ทันที';
+  return `<section class="fj-hero">
+    <div class="fj-hero-copy"><span class="eyebrow">FIRST JOBBER MONEY LAB</span><h1>เข้าใจเงิน<br>จากการลองจริง</h1><p>เรียนภาษี การลงทุน และหนี้ผ่านบทเรียนสั้น เครื่องมือจำลอง และคำอธิบายที่พาคุณตัดสินใจได้เอง</p><div class="hero-actions"><button class="primary" data-action="resume-learning">${escapeHtml(resumeLabel)} ${renderIcon('arrow')}</button><button class="secondary" data-screen="learn">ดูหลักสูตรทั้งหมด</button></div></div>
+    <aside class="hero-learning-board" aria-label="ภาพรวมการเรียน"><div class="board-head"><div><span>LEARNING RUNWAY</span><b>ผ่านแล้ว ${completed} จาก 18 ระดับ</b></div><strong>${Math.round((completed / 18) * 100)}%</strong></div>${coursePulse}<div class="learning-loop"><span><b>1</b>เรียน</span>${renderIcon('arrow')}<span><b>2</b>ทดลอง</span>${renderIcon('arrow')}<span><b>3</b>ตัดสินใจ</span></div></aside>
   </section>
-  <section class="home-learning-strip"><div><span>เรียน</span><b>เข้าใจหลักการตาม Level 0–5</b></div><i>→</i><div><span>ทดลอง</span><b>ตัดสินใจใน Tax Lab และ Simulator</b></div><i>→</i><div><span>ทบทวน</span><b>ดูผล วัดความเสี่ยง แล้วลองใหม่</b></div></section>`;
+  <section class="fj-next-action" aria-label="สิ่งที่ควรทำต่อ"><div class="next-index"><span>01</span>${renderIcon('learn')}</div><div><span class="eyebrow">ทำต่อจากตรงนี้</span><h2>${escapeHtml(resumeTitle)}</h2><p>${escapeHtml(nextNote)}</p><small>ประมาณ ${resume.minutes} นาที · มีตัวอย่าง แบบฝึก และ Quiz</small></div><button class="primary" data-action="resume-learning">${escapeHtml(resumeLabel)} ${renderIcon('arrow')}</button></section>
+  <section class="fj-section-head"><div><span class="eyebrow">DECISION LABS</span><h2>ลองโลกการเงินจริง โดยไม่ใช้เงินจริง</h2></div><p>แต่ละ Lab แสดงสมมติฐาน วิธีคำนวณ และสิ่งที่ควรตรวจเพิ่มก่อนนำไปใช้จริง</p></section>
+  <section class="fj-lab-grid">
+    <article class="fj-lab-card tax"><div class="lab-card-top"><span class="lab-card-icon">${renderIcon('tax')}</span><span class="lab-state">${escapeHtml(taxStatus)}</span></div><span class="eyebrow">TAX YEAR LAB</span><h2>เห็นภาษีทั้งปีก่อนยื่น</h2><p>กระทบยอดภาษีที่ถูกหัก และเห็นเงินที่ควรกันต่อเดือนพร้อมที่มาของตัวเลข</p><div class="mini-waterfall" aria-hidden="true"><i></i><i></i><i></i><i></i></div><button class="secondary" data-screen="tax-lab">เปิด Tax Lab ${renderIcon('arrow')}</button></article>
+    <article class="fj-lab-card investing"><div class="lab-card-top"><span class="lab-card-icon">${renderIcon('invest')}</span><span class="lab-state">${game ? `ไตรมาส ${game.round}/12` : 'ยังไม่เริ่ม mandate'}</span></div><span class="eyebrow">INVESTMENT SIMULATOR</span><h2>บริหารพอร์ต ไม่ใช่ทายราคา</h2><p>จัดสรร 6 สินทรัพย์ ตัดสินใจ 12 ไตรมาส และตรวจ drawdown, FX, inflation กับ fees</p><div class="mini-chart" aria-hidden="true"><svg viewBox="0 0 240 52"><path d="M2 43 36 31 72 36 108 17 144 25 180 8 238 14"/><path class="guide" d="M2 43H238"/></svg></div><button class="secondary" data-screen="invest-sim">เปิด Investment Lab ${renderIcon('arrow')}</button></article>
+    <article class="fj-lab-card debt"><div class="lab-card-top"><span class="lab-card-icon">${renderIcon('debt')}</span><span class="lab-state">ยอดที่รายงาน ${total}</span></div><span class="eyebrow">DEBT NAVIGATOR</span><h2>เปลี่ยนข้อมูลหนี้เป็นทางออก</h2><p>${meta ? escapeHtml(meta.title) : 'คัด route เตรียมคำพูด และเก็บหลักฐานการติดต่อเจ้าหนี้ตามสถานะจริง'}</p><div class="mini-route" aria-hidden="true"><i></i><i></i><i></i><i></i></div><button class="secondary" data-screen="${meta ? 'diagnosis' : 'consent'}">${meta ? 'ดู Action Pack' : 'เริ่ม Route Check'} ${renderIcon('arrow')}</button></article>
+  </section>
+  <section class="fj-trust-strip"><span>${renderIcon('shield')}</span><div><b>พื้นที่ซ้อมตัดสินใจ</b><p>ไม่เชื่อมบัญชีลงทุนหรือส่งคำสั่งเงินจริง เนื้อหาสำคัญมีแหล่งข้อมูลและวันที่ทบทวน</p></div><button class="text-action" data-screen="data">ดูการใช้ข้อมูล</button></section>`;
 }
 
 const taxMoney = (value) => String(value ?? '').trim() ? parseBaht(value) : 0n;
@@ -589,20 +671,50 @@ function taxLabView() {
   }
   const reconciliation = result?.reconciliation_satang || 0n;
   const outcome = reconciliation > 0n ? 'pay' : reconciliation < 0n ? 'refund' : 'even';
-  return `<section class="lab-hero tax"><div><button class="breadcrumb" data-screen="home">← หน้าหลัก</button><span class="eyebrow">TAX YEAR LAB · ปีภาษี 2569</span><h1>ปลายปีต้องเตรียมเงินเท่าไร</h1><p>ประมาณการจากเงินเดือน รายได้อื่นสุทธิ และสิทธิที่คุณยืนยันเอง ระบบแสดงวิธีคำนวณทุกขั้น</p></div><div class="lab-hero-icon">฿</div></section>
+  const journeyStage = error ? 1 : result ? 3 : 1;
+  const journeyStatus = error ? 'ตรวจตัวเลขที่กรอกแล้วคำนวณใหม่ได้ทันที' : result ? 'ได้ผลประมาณการแล้ว: ตรวจที่มาและเลือกสิ่งที่ต้องทำต่อ' : 'กรอกข้อเท็จจริงทั้งปีเพื่อเริ่มคำนวณ';
+  const journey = renderLabJourney({ topic: 'tax', activeStage: journeyStage, status: journeyStatus, stages: [
+    { title: 'Goal', detail: 'รู้ยอดที่ควรกันไว้ก่อนยื่น' },
+    { title: 'Action', detail: 'ยืนยันรายได้ ภาษีหัก และสิทธิที่ใช้ได้' },
+    { title: 'Outcome', detail: 'เห็นยอดจ่ายเพิ่ม เครดิต หรือยอดเท่ากัน' },
+    { title: 'Explanation', detail: 'ดูเงินได้สุทธิและภาษีแต่ละขั้น' },
+    { title: 'Next step', detail: 'กระทบยอด 50 ทวิ แล้วบันทึกหรือเรียนต่อ' }
+  ] });
+  return `<section class="lab-hero tax"><div><button class="breadcrumb" data-screen="home">← หน้าหลัก</button><span class="eyebrow">TAX YEAR LAB · ปีภาษี 2569</span><h1>ปลายปีต้องเตรียมเงินเท่าไร</h1><p>ประมาณการจากเงินเดือน รายได้อื่นสุทธิ และสิทธิที่คุณยืนยันเอง ระบบแสดงวิธีคำนวณทุกขั้น</p></div><div class="lab-hero-icon">${renderIcon('tax')}</div></section>
+  ${journey}
   <div class="tax-lab-layout"><section class="lab-form"><div class="section-heading"><div><span class="eyebrow">INPUT</span><h2>ข้อเท็จจริงทั้งปี</h2></div><span class="privacy-chip">เก็บในอุปกรณ์</span></div>
-    <div class="lab-form-grid">${taxField('monthlySalary','เงินเดือนก่อนหักต่อเดือน','รวมค่าจ้างประจำก่อนหักภาษี',{placeholder:'30,000'})}${taxField('salaryMonths','ได้รับเงินเดือนกี่เดือน','0–12 เดือน',{type:'number',min:0,max:12})}${taxField('bonus','โบนัสทั้งปี','ถ้ายังไม่รู้ใช้ประมาณการที่สมเหตุผล',{placeholder:'50,000'})}${taxField('otherNetIncome','รายได้อื่น “หลังหักค่าใช้จ่ายตามประเภทแล้ว”','เช่น งานเสริม—ห้ามเดาค่าใช้จ่ายถ้ายังจำแนกประเภทไม่ได้',{placeholder:'20,000'})}${taxField('withholding','ภาษีที่ถูกหักไว้แล้ว','รวมจากสลิปและหนังสือรับรอง 50 ทวิ',{placeholder:'5,000'})}${taxField('socialSecurity','ประกันสังคมที่จ่ายจริง','ตรวจยอดจากสลิป ไม่ใช้เพดานอัตโนมัติ',{placeholder:'10,500'})}${taxField('providentFund','เงินสะสม PVD ที่มีสิทธิ','เฉพาะส่วนที่คุณจ่ายและตรวจเงื่อนไขแล้ว',{placeholder:'18,000'})}${taxField('otherAllowances','ค่าลดหย่อนอื่นที่ตรวจสิทธิ์แล้ว','ไม่รวมค่าลดหย่อนส่วนตัว 60,000 ที่ระบบใส่ให้',{placeholder:'0'})}${taxField('monthsRemaining','เหลือกี่เดือนให้กันเงิน','อย่างน้อย 1 เดือน',{type:'number',min:1,max:12})}</div>
-    <button class="primary tax-calculate" data-action="calculate-tax">คำนวณและอธิบายผล <span>→</span></button><p class="lab-safety">ไม่ใช้แทนแบบ ภ.ง.ด.90/91 และไม่ครอบคลุมการจำแนกเงินได้ ธุรกิจ ต่างประเทศ เครดิตเงินปันผล หรือสิทธิซับซ้อน</p>
+    <section class="form-cluster"><div class="cluster-heading"><span>1</span><div><b>รายได้ที่คาดว่าจะได้รับ</b><small>เริ่มจากตัวเลขที่เห็นจากสลิปหรือสัญญาจ้าง</small></div></div><div class="lab-form-grid">${taxField('monthlySalary','เงินเดือนก่อนหักต่อเดือน','รวมค่าจ้างประจำก่อนหักภาษี',{placeholder:'30,000'})}${taxField('salaryMonths','ได้รับเงินเดือนกี่เดือน','0–12 เดือน',{type:'number',min:0,max:12})}${taxField('bonus','โบนัสทั้งปี','ถ้ายังไม่รู้ใช้ประมาณการที่สมเหตุผล',{placeholder:'50,000'})}${taxField('otherNetIncome','รายได้อื่นสุทธิ','หลังหักค่าใช้จ่ายตามประเภทแล้ว',{placeholder:'20,000'})}</div></section>
+    <details class="advanced-form-panel"><summary><span><b>2 · ภาษีที่หักและสิทธิของคุณ</b><small>เปิดเมื่อมีสลิป 50 ทวิ, PVD หรือค่าลดหย่อนอื่น</small></span><em>5 รายการ</em></summary><div class="lab-form-grid">${taxField('withholding','ภาษีที่ถูกหักไว้แล้ว','รวมจากสลิปและหนังสือรับรอง 50 ทวิ',{placeholder:'5,000'})}${taxField('socialSecurity','ประกันสังคมที่จ่ายจริง','ตรวจยอดจากสลิป ไม่ใช้เพดานอัตโนมัติ',{placeholder:'10,500'})}${taxField('providentFund','เงินสะสม PVD ที่มีสิทธิ','เฉพาะส่วนที่คุณจ่ายและตรวจเงื่อนไขแล้ว',{placeholder:'18,000'})}${taxField('otherAllowances','ค่าลดหย่อนอื่นที่ตรวจสิทธิ์แล้ว','ไม่รวมค่าลดหย่อนส่วนตัว 60,000 ที่ระบบใส่ให้',{placeholder:'0'})}${taxField('monthsRemaining','เหลือกี่เดือนให้กันเงิน','อย่างน้อย 1 เดือน',{type:'number',min:1,max:12})}</div></details>
+    <button class="primary tax-calculate" data-action="calculate-tax">คำนวณและอธิบายผล ${renderIcon('arrow')}</button><p class="lab-safety">ไม่ใช้แทนแบบ ภ.ง.ด.90/91 และไม่ครอบคลุมการจำแนกเงินได้ ธุรกิจ ต่างประเทศ เครดิตเงินปันผล หรือสิทธิซับซ้อน</p>
   </section>
   <section class="tax-result-host">${error ? `<div class="lab-error"><b>ยังคำนวณไม่ได้</b><p>${escapeHtml(error.message)}</p></div>` : result ? `<div class="tax-outcome ${outcome}"><span class="eyebrow">ESTIMATED RECONCILIATION</span><small>ภาษีประมาณการ − ภาษีที่ถูกหักไว้</small><strong>${reconciliation > 0n ? formatBaht(reconciliation) : reconciliation < 0n ? formatBaht(-reconciliation) : '0.00 บาท'}</strong><b>${outcome === 'pay' ? 'ยอดที่ควรเตรียมเพิ่ม' : outcome === 'refund' ? 'เครดิตภาษีอาจเหลือสำหรับขอคืน' : 'ประมาณการเท่ากับยอดที่ถูกหักไว้'}</b>${outcome === 'pay' ? `<div class="reserve-callout"><span>ถ้าแบ่งใน ${state.taxLab.monthsRemaining} เดือน</span><strong>${formatBaht(result.reserve_per_month_satang)}/เดือน</strong></div>` : ''}</div>
     <div class="tax-waterfall"><span class="eyebrow">CALCULATION MAP</span>${[['รายได้ทั้งปี',result.total_income_satang],['หักค่าใช้จ่ายเงินเดือน',-result.employment_expense_satang],['หักค่าลดหย่อนรวม',-result.total_allowances_satang],['เงินได้สุทธิ',result.taxable_income_satang],['ภาษีประมาณการ',result.estimated_tax_satang]].map(([label,value],index)=>`<div class="${index===4?'final':''}"><span>${escapeHtml(label)}</span><i></i><b>${value < 0n ? '− ' : ''}${formatBaht(value < 0n ? -value : value)}</b></div>`).join('')}</div>
     <section class="tax-brackets"><div class="section-heading"><div><span class="eyebrow">PROGRESSIVE TAX</span><h2>เงินของคุณอยู่ในขั้นไหน</h2></div><strong>${(result.marginal_rate_bps/100).toFixed(0)}% marginal</strong></div>${result.bracket_breakdown.map((row)=>`<div><span>${row.rate_bps/100}%</span><div><i style="width:${Math.min(100,Number(row.taxable_portion_satang)*100/Math.max(1,Number(result.taxable_income_satang)))}%"></i></div><b>${formatBaht(row.tax_satang)}</b></div>`).join('')}<small>อัตราสูงสุดใช้เฉพาะเงินส่วนที่อยู่ในช่วงนั้น ไม่ได้คูณรายได้ทั้งหมด</small></section>
     <div class="tax-next-actions"><div><span>แบบที่น่าจะเกี่ยวข้อง</span><b>${escapeHtml(result.likely_form)}</b></div><div><span>ทำต่อ</span><b>กระทบยอดกับ 50 ทวิและเอกสารจริงก่อนยื่น</b></div></div>
-    <div class="lab-action-row"><button class="secondary" data-action="save-tax-snapshot">บันทึกประมาณการ</button><button class="primary" data-action="open-course" data-course="tax">เรียนภาษีตามลำดับ <span>→</span></button></div>` : `<div class="empty-lab-result"><div>฿</div><h2>ผลลัพธ์จะไม่ได้มีแค่ยอดภาษี</h2><p>คุณจะเห็นที่มาของเงินได้สุทธิ ภาษีแต่ละขั้น จ่ายเพิ่ม/เครดิตเหลือ และจำนวนที่ควรกันต่อเดือน</p><ol><li>กรอกข้อเท็จจริงทั้งปี</li><li>กดคำนวณ</li><li>กลับไปแก้สมมติฐานได้ตลอด</li></ol></div>`}</section></div>
+    <div class="lab-action-row"><button class="secondary" data-action="save-tax-snapshot">บันทึกประมาณการ</button><button class="primary" data-action="open-course" data-course="tax">เรียนภาษีตามลำดับ ${renderIcon('arrow')}</button></div>` : `<div class="empty-lab-result"><div>${renderIcon('tax')}</div><h2>ผลลัพธ์จะไม่ได้มีแค่ยอดภาษี</h2><p>คุณจะเห็นที่มาของเงินได้สุทธิ ภาษีแต่ละขั้น จ่ายเพิ่ม/เครดิตเหลือ และจำนวนที่ควรกันต่อเดือน</p><ol><li>กรอกข้อเท็จจริงทั้งปี</li><li>กดคำนวณ</li><li>กลับไปแก้สมมติฐานได้ตลอด</li></ol></div>`}</section></div>
   <section class="lab-sources"><span>หลักคำนวณ</span><a href="https://www.rd.go.th/59668.html" target="_blank" rel="noreferrer">กรมสรรพากร: ค่าใช้จ่ายและค่าลดหย่อน ↗</a><a href="https://www.rd.go.th/5938.html" target="_blank" rel="noreferrer">กรมสรรพากร: บัญชีอัตราภาษี ↗</a><small>ตรวจ 17 ส.ค. 2569 · กติกาอาจเปลี่ยน ควรตรวจปีภาษีจริงก่อนยื่น</small></section>`;
 }
 
 const allocationLabels = { capital_preservation: 'รักษาเงินต้น', core_balanced: 'Core balanced', long_horizon: 'ระยะยาว', thailand_income: 'รายได้ไทย' };
+function investmentJourneyStages() {
+  return [
+    { title: 'Goal', detail: 'ตั้งเป้าหมาย ระยะเวลา และขอบเขตความเสี่ยง' },
+    { title: 'Action', detail: 'เลือกสัดส่วนและวิธีส่งคำสั่งในแต่ละไตรมาส' },
+    { title: 'Outcome', detail: 'ดู NAV ผลตอบแทน drawdown และต้นทุนจริงในเกม' },
+    { title: 'Explanation', detail: 'อ่าน market tape, stress test และ decision audit' },
+    { title: 'Next step', detail: 'สรุปบทเรียน แล้วกลับไปทบทวนหลักการลงทุน' }
+  ];
+}
+
+function debtJourney(activeStage, status) {
+  return renderLabJourney({ topic: 'debt', activeStage, status, stages: [
+    { title: 'Goal', detail: 'เห็นสถานะหนี้และสิ่งที่เร่งด่วนที่สุดก่อน' },
+    { title: 'Action', detail: 'รวบรวมข้อเท็จจริง ติดต่อ และทำ checklist ทีละข้อ' },
+    { title: 'Outcome', detail: 'บันทึกหลักฐาน การตอบกลับ และยอดที่รายงานจริง' },
+    { title: 'Explanation', detail: 'ดู route, เงินก่อนหนี้ และสมมติฐานการจำลอง' },
+    { title: 'Next step', detail: 'ติดตามวันนัด อัปเดต Debt Map และเรียนต่อ' }
+  ] });
+}
 function gameTotal(game) { return ASSETS.reduce((sum, asset) => sum + BigInt(game.holdings[asset]), 0n); }
 function percentLabel(bps) { return `${bps >= 0 ? '+' : '−'}${(Math.abs(bps) / 100).toFixed(1)}%`; }
 function signedBaht(value) { const amount = BigInt(value); return `${amount >= 0n ? '+' : '−'}${formatBaht(amount >= 0n ? amount : -amount)}`; }
@@ -628,7 +740,7 @@ function investmentChart(game) {
   return `<figure class="ic-performance-chart"><figcaption><b>มูลค่าพอร์ต</b><span><i></i>Nominal <i></i>หลังหักเงินเฟ้อ</span></figcaption><svg viewBox="0 0 640 215" role="img" aria-label="มูลค่าพอร์ต nominal ${formatBaht(currentNominal)} และมูลค่าหลังเงินเฟ้อ ${formatBaht(currentReal)} หลัง ${game.round} ไตรมาส"><path class="grid" d="M58 54H598M58 114H598M58 174H598"/><path class="axis" d="M58 42V174H598"/><polyline class="nominal" points="${points(nominal)}"/><polyline class="real" points="${points(real)}"/><text x="58" y="198">เริ่ม</text><text x="598" y="198" text-anchor="end">Q${game.round}</text><text x="598" y="48" text-anchor="end">${escapeHtml(formatBaht(BigInt(Math.round(max))))}</text></svg></figure>`;
 }
 function dataDesk() {
-  return `<section class="ic-data-desk"><div><span class="eyebrow">OFFICIAL DATA DESK</span><h2>ข้อมูลอ้างอิงจริง ไม่ใช่ ticker สด</h2><p>ใช้สร้างบริบทก่อนเข้า stress path ผลตอบแทนในเกมเป็นสมมติฐานโปร่งใส ไม่ใช่ข้อมูลย้อนหลังที่นำมาแต่งเป็นอนาคต</p></div><div class="ic-data-grid">${MARKET_DATA_SNAPSHOT.map((item)=>`<a href="${item.url}" target="_blank" rel="noreferrer"><span>${escapeHtml(item.label)}</span><strong>${escapeHtml(item.value)}</strong><small>${escapeHtml(item.as_of)} · ${escapeHtml(item.source)} ↗</small></a>`).join('')}</div></section>`;
+  return `<details class="ic-data-desk"><summary><span><span class="eyebrow">OFFICIAL DATA DESK</span><b>ดูข้อมูลอ้างอิงจริงและวันที่ของข้อมูล</b><small>ใช้สร้างบริบท ไม่ใช่ ticker สดหรือคำทำนาย</small></span><em>${MARKET_DATA_SNAPSHOT.length} ตัวชี้วัด</em></summary><div class="ic-data-intro"><h2>ข้อมูลอ้างอิงจริง ไม่ใช่ ticker สด</h2><p>ผลตอบแทนในเกมเป็นสมมติฐานโปร่งใส ไม่ใช่ข้อมูลย้อนหลังที่นำมาแต่งเป็นอนาคต</p></div><div class="ic-data-grid">${MARKET_DATA_SNAPSHOT.map((item)=>`<a href="${item.url}" target="_blank" rel="noreferrer"><span>${escapeHtml(item.label)}</span><strong>${escapeHtml(item.value)}</strong><small>${escapeHtml(item.as_of)} · ${escapeHtml(item.source)} ↗</small></a>`).join('')}</div></details>`;
 }
 function diagnosticsPanel(allocation) {
   try {
@@ -639,7 +751,7 @@ function diagnosticsPanel(allocation) {
   }
 }
 function assetResearchTable() {
-  return `<details class="ic-research-table"><summary>เปิด Asset research sheet: บทบาท ความเสี่ยง สภาพคล่อง และค่าธรรมเนียมสมมติ</summary><div class="table-responsive"><table><thead><tr><th>สินทรัพย์</th><th>บทบาท</th><th>ความเสี่ยงหลัก</th><th>สภาพคล่อง</th><th>Expense proxy</th></tr></thead><tbody>${ASSETS.map((asset)=>{const item=ASSET_CATALOG[asset];return `<tr><td><i class="asset-${asset}"></i><b>${escapeHtml(item.label)}</b></td><td>${escapeHtml(item.role)}</td><td>${escapeHtml(item.primary_risk)}</td><td>${escapeHtml(item.liquidity)}</td><td>${(item.expense_bps/100).toFixed(2)}%/ปี</td></tr>`}).join('')}</tbody></table></div><p>Expense proxy เป็นสมมติฐานเพื่อให้เห็นผลของต้นทุน ไม่ใช่ค่าธรรมเนียมของกองทุนใด ต้องอ่าน Fund Factsheet จริงก่อนซื้อ</p></details>`;
+  return `<details class="ic-research-table"><summary>เปิด Asset research sheet: บทบาท ความเสี่ยง สภาพคล่อง และค่าธรรมเนียมสมมติ</summary><div class="table-responsive" tabindex="0" role="region" aria-label="ตารางข้อมูลสินทรัพย์ เลื่อนซ้ายขวาได้"><table><thead><tr><th>สินทรัพย์</th><th>บทบาท</th><th>ความเสี่ยงหลัก</th><th>สภาพคล่อง</th><th>Expense proxy</th></tr></thead><tbody>${ASSETS.map((asset)=>{const item=ASSET_CATALOG[asset];return `<tr><td><i class="asset-${asset}"></i><b>${escapeHtml(item.label)}</b></td><td>${escapeHtml(item.role)}</td><td>${escapeHtml(item.primary_risk)}</td><td>${escapeHtml(item.liquidity)}</td><td>${(item.expense_bps/100).toFixed(2)}%/ปี</td></tr>`}).join('')}</tbody></table></div><p>Expense proxy เป็นสมมติฐานเพื่อให้เห็นผลของต้นทุน ไม่ใช่ค่าธรรมเนียมของกองทุนใด ต้องอ่าน Fund Factsheet จริงก่อนซื้อ</p></details>`;
 }
 function investmentSources() {
   return `<section class="ic-sources"><span>MODEL GOVERNANCE</span><p>Scenario paths เป็น stress simulation แบบ deterministic; ไม่ใช่ backtest, price feed หรือคำแนะนำเฉพาะบุคคล การตัดสินใจจริงต้องตรวจ Fund Factsheet, currency hedge, ภาษี, ค่าธรรมเนียม และ suitability ของผู้ให้บริการที่ได้รับอนุญาต</p><div><a href="https://www.sec.or.th/TH/Pages/News_Detail.aspx?SECID=5439" target="_blank" rel="noreferrer">ก.ล.ต.: suitability และ basic asset allocation ↗</a><a href="https://www.setinvestnow.com/th/knowledge/article/707-tsi-investment-portfolio-allocation-by-financial-goals" target="_blank" rel="noreferrer">SET: จัดพอร์ตตามเป้าหมายและเวลา ↗</a><a href="https://www.thaibma.or.th/EN/Market/Index/MTMGovIndex.aspx" target="_blank" rel="noreferrer">ThaiBMA: Government Bond Index ↗</a><a href="https://media.set.or.th/set/Documents/2025/Feb/Index_Ground_Rule_EN.pdf" target="_blank" rel="noreferrer">SET: Total Return Index methodology ↗</a></div><small>ทบทวน 18 ส.ค. 2569 · ข้อมูลตลาดมีวันที่กำกับและไม่อัปเดตอัตโนมัติ</small></section>`;
@@ -653,28 +765,33 @@ function fundingFlags(setup) {
 }
 function lastRoundReview(last) {
   if (!last) return '';
-  return `<section class="ic-post-trade"><div class="section-heading"><div><span class="eyebrow">POST-TRADE REVIEW · Q${last.round}</span><h2>${escapeHtml(last.title)}</h2></div><strong class="${last.change_bps>=0?'gain':'loss'}">${percentLabel(last.change_bps)}</strong></div><p>${escapeHtml(last.signal)}</p><div class="table-responsive"><table><thead><tr><th>สินทรัพย์</th><th>สัดส่วนเป้าหมาย</th><th>ผลตอบแทนสมมติ</th><th>P&amp;L ก่อน fee</th><th>Fee</th></tr></thead><tbody>${ASSETS.map((asset)=>`<tr><td><i class="asset-${asset}"></i>${escapeHtml(ASSET_CATALOG[asset].short)}</td><td>${last.target_allocation[asset]}%</td><td class="${last.returns_bps[asset]>=0?'gain':'loss'}">${percentLabel(last.returns_bps[asset])}</td><td>${signedBaht(last.attribution[asset].gross_pnl_satang)}</td><td>−${formatBaht(BigInt(last.attribution[asset].fee_satang))}</td></tr>`).join('')}</tbody></table></div><div class="ic-decision-attribution"><div><span>ผลของการตัดสินใจเทียบถือเดิม</span><b class="${BigInt(last.decision_delta_satang)>=0n?'gain':'loss'}">${signedBaht(last.decision_delta_satang)}</b></div><div><span>Turnover</span><b>${formatBaht(BigInt(last.turnover_satang))}</b></div><div><span>ต้นทุนซื้อขาย</span><b>${formatBaht(BigInt(last.transaction_cost_satang))}</b></div></div><blockquote>${escapeHtml(last.lesson)}</blockquote><small>${escapeHtml(last.reference)}</small></section>`;
+  return `<section class="ic-post-trade"><div class="section-heading"><div><span class="eyebrow">POST-TRADE REVIEW · Q${last.round}</span><h2>${escapeHtml(last.title)}</h2></div><strong class="${last.change_bps>=0?'gain':'loss'}">${percentLabel(last.change_bps)}</strong></div><p>${escapeHtml(last.signal)}</p><div class="table-responsive" tabindex="0" role="region" aria-label="ตารางทบทวนผลการส่งคำสั่ง เลื่อนซ้ายขวาได้"><table><thead><tr><th>สินทรัพย์</th><th>สัดส่วนเป้าหมาย</th><th>ผลตอบแทนสมมติ</th><th>P&amp;L ก่อน fee</th><th>Fee</th></tr></thead><tbody>${ASSETS.map((asset)=>`<tr><td><i class="asset-${asset}"></i>${escapeHtml(ASSET_CATALOG[asset].short)}</td><td>${last.target_allocation[asset]}%</td><td class="${last.returns_bps[asset]>=0?'gain':'loss'}">${percentLabel(last.returns_bps[asset])}</td><td>${signedBaht(last.attribution[asset].gross_pnl_satang)}</td><td>−${formatBaht(BigInt(last.attribution[asset].fee_satang))}</td></tr>`).join('')}</tbody></table></div><div class="ic-decision-attribution"><div><span>ผลของการตัดสินใจเทียบถือเดิม</span><b class="${BigInt(last.decision_delta_satang)>=0n?'gain':'loss'}">${signedBaht(last.decision_delta_satang)}</b></div><div><span>Turnover</span><b>${formatBaht(BigInt(last.turnover_satang))}</b></div><div><span>ต้นทุนซื้อขาย</span><b>${formatBaht(BigInt(last.transaction_cost_satang))}</b></div></div><blockquote>${escapeHtml(last.lesson)}</blockquote><small>${escapeHtml(last.reference)}</small></section>`;
 }
 function investmentSimView() {
   const game = state.investmentGame;
   if (!game) {
     const setup = state.investmentSetup; const flags = fundingFlags(setup); const tape = MARKET_TAPES[setup.scenarioId] || MARKET_TAPES['thai-policy-cycle'];
-    return `<section class="ic-hero"><button class="breadcrumb" data-screen="home">← หน้าหลัก</button><div><span class="eyebrow">INVESTMENT COMMITTEE LAB · เงินเสมือน</span><h1>บริหาร mandate ไม่ใช่ทายว่าตัวไหนจะขึ้น</h1><p>กำหนดเป้าหมายและข้อจำกัด สร้างพอร์ต 6 สินทรัพย์ เลือกวิธีส่งคำสั่ง แล้วรับผลจาก growth, inflation, rates, FX, fees และ liquidity shock ตลอด 12 ไตรมาส</p></div><div class="ic-hero-stamp"><span>IC</span><b>12Q</b><small>Decision audit</small></div></section>${dataDesk()}
-    <div class="ic-setup-grid"><section class="ic-panel"><span class="eyebrow">01 · INVESTMENT MANDATE</span><h2>เงินก้อนนี้ต้องทำงานอะไร</h2><div class="lab-form-grid"><label class="lab-field"><span>เงินเริ่มต้นเสมือน</span><small>ไม่เชื่อมบัญชีเงินจริง</small><input id="invest_starting" inputmode="decimal" value="${escapeHtml(setup.starting)}"></label><label class="lab-field"><span>เติมเงินทุกเดือน</span><small>ระบบรวมเป็นเงินเติมรายไตรมาส</small><input id="invest_monthlyContribution" inputmode="decimal" value="${escapeHtml(setup.monthlyContribution)}"></label><label class="lab-field"><span>เป้าหมายปลายทาง</span><small>ใช้วัด progress ไม่รับประกันผล</small><input id="invest_goal" inputmode="decimal" value="${escapeHtml(setup.goal)}"></label><label class="lab-field"><span>ระยะเวลาเป้าหมาย</span><small>เกมจำลอง 3 ปีแรกของแผน</small><input id="invest_horizonYears" type="number" min="1" max="30" value="${escapeHtml(setup.horizonYears)}"><em>ปี</em></label><label class="lab-field"><span>เงินฉุกเฉิน</span><small>ความสามารถถือพอร์ตเมื่อรายได้สะดุด</small><input id="invest_emergencyMonths" type="number" min="0" max="24" value="${escapeHtml(setup.emergencyMonths)}"><em>เดือน</em></label><label class="lab-field"><span>APR หนี้ดอกเบี้ยสูงสุด</span><small>ใส่ 0 หากไม่มี</small><input id="invest_debtApr" type="number" min="0" max="100" step="0.1" value="${escapeHtml(setup.debtApr)}"><em>%</em></label><label class="lab-field"><span>Maximum drawdown ที่รับได้</span><small>ความเต็มใจรับความเสี่ยง ไม่ใช่ความสามารถอย่างเดียว</small><input id="invest_riskTolerance" type="number" min="1" max="80" value="${escapeHtml(setup.riskTolerance)}"><em>%</em></label><label class="lab-field"><span>Platform/advisory fee</span><small>หน่วย basis points ต่อปี; 100 bps = 1%</small><input id="invest_platformFeeBps" type="number" min="0" max="500" value="${escapeHtml(setup.platformFeeBps)}"><em>bps</em></label><label class="lab-field"><span>ต้นทุนซื้อขาย</span><small>ใช้กับ turnover ในแต่ละคำสั่ง</small><input id="invest_transactionCostBps" type="number" min="0" max="500" value="${escapeHtml(setup.transactionCostBps)}"><em>bps</em></label></div>${flags.length?`<div class="ic-funding-flags"><b>Funding risk ที่ต้องเห็นก่อนลงทุน</b>${flags.map(flag=>`<p>${escapeHtml(flag)}</p>`).join('')}</div>`:'<div class="ic-funding-ready">ไม่พบ funding risk จากข้อมูลขั้นต่ำนี้ แต่ยังต้องตรวจรายจ่ายจริง ประกัน และภาระครอบครัว</div>'}</section>
+    const journey = renderLabJourney({ topic: 'investing', activeStage: 1, status: 'กำหนด mandate และ risk budget ก่อนเริ่มเกม', stages: investmentJourneyStages() });
+    return `<section class="ic-hero"><button class="breadcrumb" data-screen="home">← หน้าหลัก</button><div><span class="eyebrow">INVESTMENT COMMITTEE LAB · เงินเสมือน</span><h1>บริหาร mandate ไม่ใช่ทายว่าตัวไหนจะขึ้น</h1><p>กำหนดเป้าหมายและข้อจำกัด สร้างพอร์ต 6 สินทรัพย์ เลือกวิธีส่งคำสั่ง แล้วรับผลจาก growth, inflation, rates, FX, fees และ liquidity shock ตลอด 12 ไตรมาส</p></div><div class="ic-hero-stamp"><span>IC</span><b>12Q</b><small>Decision audit</small></div></section>${journey}${dataDesk()}
+    <div class="ic-setup-grid"><section class="ic-panel"><span class="eyebrow">01 · INVESTMENT MANDATE</span><h2>เงินก้อนนี้ต้องทำงานอะไร</h2>
+      <section class="form-cluster"><div class="form-cluster-head"><span>ข้อมูลหลัก</span><small>เริ่มจากเงินตั้งต้น เงินเติม และเป้าหมาย</small></div><div class="lab-form-grid"><label class="lab-field"><span>เงินเริ่มต้นเสมือน</span><small>ไม่เชื่อมบัญชีเงินจริง</small><input id="invest_starting" inputmode="decimal" value="${escapeHtml(setup.starting)}"></label><label class="lab-field"><span>เติมเงินทุกเดือน</span><small>ระบบรวมเป็นเงินเติมรายไตรมาส</small><input id="invest_monthlyContribution" inputmode="decimal" value="${escapeHtml(setup.monthlyContribution)}"></label><label class="lab-field"><span>เป้าหมายปลายทาง</span><small>ใช้วัด progress ไม่รับประกันผล</small><input id="invest_goal" inputmode="decimal" value="${escapeHtml(setup.goal)}"></label></div></section>
+      <details class="advanced-form-panel"><summary><span><b>ความพร้อมรับความเสี่ยง</b><small>ระยะเวลา เงินฉุกเฉิน หนี้ และ drawdown</small></span><i aria-hidden="true">+</i></summary><div class="lab-form-grid"><label class="lab-field"><span>ระยะเวลาเป้าหมาย</span><small>เกมจำลอง 3 ปีแรกของแผน</small><input id="invest_horizonYears" type="number" min="1" max="30" value="${escapeHtml(setup.horizonYears)}"><em>ปี</em></label><label class="lab-field"><span>เงินฉุกเฉิน</span><small>ความสามารถถือพอร์ตเมื่อรายได้สะดุด</small><input id="invest_emergencyMonths" type="number" min="0" max="24" value="${escapeHtml(setup.emergencyMonths)}"><em>เดือน</em></label><label class="lab-field"><span>APR หนี้ดอกเบี้ยสูงสุด</span><small>ใส่ 0 หากไม่มี</small><input id="invest_debtApr" type="number" min="0" max="100" step="0.1" value="${escapeHtml(setup.debtApr)}"><em>%</em></label><label class="lab-field"><span>Maximum drawdown ที่รับได้</span><small>ความเต็มใจรับความเสี่ยง ไม่ใช่ความสามารถอย่างเดียว</small><input id="invest_riskTolerance" type="number" min="1" max="80" value="${escapeHtml(setup.riskTolerance)}"><em>%</em></label></div></details>
+      <details class="advanced-form-panel compact"><summary><span><b>ต้นทุนการลงทุน</b><small>ใช้ดูผลกระทบของค่าธรรมเนียมและ turnover</small></span><i aria-hidden="true">+</i></summary><div class="lab-form-grid"><label class="lab-field"><span>Platform/advisory fee</span><small>100 bps = 1% ต่อปี</small><input id="invest_platformFeeBps" type="number" min="0" max="500" value="${escapeHtml(setup.platformFeeBps)}"><em>bps</em></label><label class="lab-field"><span>ต้นทุนซื้อขาย</span><small>ใช้กับ turnover ในแต่ละคำสั่ง</small><input id="invest_transactionCostBps" type="number" min="0" max="500" value="${escapeHtml(setup.transactionCostBps)}"><em>bps</em></label></div></details>
+      ${flags.length?`<div class="ic-funding-flags"><b>Funding risk ที่ต้องเห็นก่อนลงทุน</b>${flags.map(flag=>`<p>${escapeHtml(flag)}</p>`).join('')}</div>`:'<div class="ic-funding-ready">ไม่พบ funding risk จากข้อมูลขั้นต่ำนี้ แต่ยังต้องตรวจรายจ่ายจริง ประกัน และภาระครอบครัว</div>'}</section>
     <section class="ic-panel"><span class="eyebrow">02 · SCENARIO MANDATE</span><h2>เลือกโลกที่จะทดสอบ</h2><label class="ic-select"><span>Market tape</span><select id="invest_scenarioId">${Object.values(MARKET_TAPES).map(item=>`<option value="${item.id}" ${setup.scenarioId===item.id?'selected':''}>${escapeHtml(item.title)}</option>`).join('')}</select></label><div class="ic-tape-brief"><b>${escapeHtml(tape.title)}</b><p>${escapeHtml(tape.note)}</p><span>12 ไตรมาส · deterministic · เล่นซ้ำแล้วได้ตลาดเดิมเพื่อเปรียบเทียบการตัดสินใจ</span></div><div class="ic-history-range"><span>REALITY CHECK</span><strong>SET Index price return เคยอยู่ที่ −61.61% ในปี 2000 และ +78.69% ในปี 2003</strong><p>ช่วงกว้างนี้มาจากสถิติ SET ทางการ และเป็นเหตุผลที่เกมไม่ใช้ “ผลตอบแทนเฉลี่ย” เพียงตัวเดียวตัดสินพอร์ต</p><a href="https://media.set.or.th/common/research/848.pdf" target="_blank" rel="noreferrer">SET annual statistics ↗</a></div></section></div>
-    <section class="ic-construction"><div class="section-heading"><div><span class="eyebrow">03 · PORTFOLIO CONSTRUCTION</span><h2>กำหนด risk budget ด้วยตัวเอง</h2></div><span class="privacy-chip">ข้อมูลอยู่บนอุปกรณ์นี้</span></div><div class="ic-preset-row">${presetCards(setup.preset,'setup')}</div>${allocationEditor(setup.allocation,'invest_alloc')}${diagnosticsPanel(setup.allocation)}${assetResearchTable()}<button class="primary ic-approve" data-action="start-investment-sim">อนุมัติ mandate และเข้าไตรมาส 1 <span>→</span></button><p class="lab-safety">นี่เป็นเครื่องมือเรียนรู้ทั่วไป ไม่ใช่ suitability test ตามกฎหมาย ไม่เสนอชื่อกองทุน/หุ้น และไม่ส่งคำสั่งเงินจริง</p></section>${investmentSources()}`;
+    <section class="ic-construction"><div class="section-heading"><div><span class="eyebrow">03 · PORTFOLIO CONSTRUCTION</span><h2>กำหนด risk budget ด้วยตัวเอง</h2></div><span class="privacy-chip">ข้อมูลอยู่บนอุปกรณ์นี้</span></div><div class="ic-preset-row">${presetCards(setup.preset,'setup')}</div>${allocationEditor(setup.allocation,'invest_alloc')}${diagnosticsPanel(setup.allocation)}${assetResearchTable()}<button class="primary ic-approve" data-action="start-investment-sim">อนุมัติ mandate และเข้าไตรมาส 1 ${renderIcon('arrow')}</button><p class="lab-safety">นี่เป็นเครื่องมือเรียนรู้ทั่วไป ไม่ใช่ suitability test ตามกฎหมาย ไม่เสนอชื่อกองทุน/หุ้น และไม่ส่งคำสั่งเงินจริง</p></section>${investmentSources()}`;
   }
   const summary = summarizeInvestmentSimulation(game); const tape = MARKET_TAPES[game.scenario_id];
   if (game.completed) {
     const pnlClass = summary.investment_pnl_satang >= 0n ? 'gain' : 'loss';
-    return `<section class="ic-finish"><button class="breadcrumb" data-screen="home">← หน้าหลัก</button><span class="eyebrow">INVESTMENT COMMITTEE · FINAL REVIEW</span><h1>ปิดรอบ 12 ไตรมาสด้วย audit trail</h1><p>${escapeHtml(summary.scenario_title)} · เกมครอบคลุม 3 ปีแรกจากเป้าหมาย ${game.goal_horizon_years} ปี</p><div class="ic-finish-grid"><div><span>มูลค่า Nominal</span><strong>${formatBaht(summary.final_value_satang)}</strong><small>เงินต้น+เงินเติม ${formatBaht(summary.invested_capital_satang)}</small></div><div><span>มูลค่าหลังเงินเฟ้อ</span><strong>${formatBaht(summary.real_value_satang)}</strong><small>กำลังซื้อในมูลค่าเงินวันเริ่มเกม</small></div><div><span>Investment P&amp;L</span><strong class="${pnlClass}">${signedBaht(summary.investment_pnl_satang)}</strong><small>${percentLabel(summary.total_return_bps)} เทียบเงินที่ใส่จริง</small></div><div><span>Maximum drawdown</span><strong class="${summary.max_drawdown_bps>summary.risk_limit_bps?'loss':''}">${(summary.max_drawdown_bps/100).toFixed(1)}%</strong><small>กรอบที่ประกาศ ${(summary.risk_limit_bps/100).toFixed(1)}% · breach ${summary.risk_breach_rounds} ไตรมาส</small></div></div>${investmentChart(game)}
+    return `${renderLabJourney({ topic: 'investing', activeStage: 4, status: 'จบ 12 ไตรมาสแล้ว: อ่าน audit แล้วใช้บทเรียนกับแผนจริง', stages: investmentJourneyStages() })}<section class="ic-finish"><button class="breadcrumb" data-screen="home">← หน้าหลัก</button><span class="eyebrow">INVESTMENT COMMITTEE · FINAL REVIEW</span><h1>ปิดรอบ 12 ไตรมาสด้วย audit trail</h1><p>${escapeHtml(summary.scenario_title)} · เกมครอบคลุม 3 ปีแรกจากเป้าหมาย ${game.goal_horizon_years} ปี</p><div class="ic-finish-grid"><div><span>มูลค่า Nominal</span><strong>${formatBaht(summary.final_value_satang)}</strong><small>เงินต้น+เงินเติม ${formatBaht(summary.invested_capital_satang)}</small></div><div><span>มูลค่าหลังเงินเฟ้อ</span><strong>${formatBaht(summary.real_value_satang)}</strong><small>กำลังซื้อในมูลค่าเงินวันเริ่มเกม</small></div><div><span>Investment P&amp;L</span><strong class="${pnlClass}">${signedBaht(summary.investment_pnl_satang)}</strong><small>${percentLabel(summary.total_return_bps)} เทียบเงินที่ใส่จริง</small></div><div><span>Maximum drawdown</span><strong class="${summary.max_drawdown_bps>summary.risk_limit_bps?'loss':''}">${(summary.max_drawdown_bps/100).toFixed(1)}%</strong><small>กรอบที่ประกาศ ${(summary.risk_limit_bps/100).toFixed(1)}% · breach ${summary.risk_breach_rounds} ไตรมาส</small></div></div>${investmentChart(game)}
     <section class="ic-wealth-bridge"><h2>เงินปลายทางมาจากไหน</h2><div><span>เงินเริ่มต้น</span><b>${formatBaht(BigInt(game.starting_satang))}</b></div><div><span>เงินเติมทั้งหมด</span><b>+${formatBaht(summary.total_contributions_satang)}</b></div><div><span>กำไร/ขาดทุนตลาดก่อนต้นทุน</span><b class="${summary.gross_market_pnl_satang>=0n?'gain':'loss'}">${signedBaht(summary.gross_market_pnl_satang)}</b></div><div><span>ค่าธรรมเนียมสินทรัพย์+แพลตฟอร์ม</span><b>−${formatBaht(summary.total_fees_satang)}</b></div><div><span>ต้นทุน turnover</span><b>−${formatBaht(summary.total_transaction_cost_satang)}</b></div></section>
-    <section class="ic-audit"><h2>Decision audit</h2><div class="table-responsive"><table><thead><tr><th>Q</th><th>เหตุการณ์</th><th>คำสั่ง</th><th>ผลตลาดสุทธิ</th><th>Drawdown</th><th>เทียบถือเดิม</th></tr></thead><tbody>${game.history.map(item=>`<tr><td>${item.round}</td><td>${escapeHtml(item.title)}</td><td>${escapeHtml(DECISION_MODES[item.decision_mode].label)}</td><td class="${item.change_bps>=0?'gain':'loss'}">${percentLabel(item.change_bps)}</td><td>${(item.drawdown_bps/100).toFixed(1)}%</td><td class="${BigInt(item.decision_delta_satang)>=0n?'gain':'loss'}">${signedBaht(item.decision_delta_satang)}</td></tr>`).join('')}</tbody></table></div></section>
+    <section class="ic-audit"><h2>Decision audit</h2><div class="table-responsive" tabindex="0" role="region" aria-label="ตารางบันทึกการตัดสินใจ 12 ไตรมาส เลื่อนซ้ายขวาได้"><table><thead><tr><th>Q</th><th>เหตุการณ์</th><th>คำสั่ง</th><th>ผลตลาดสุทธิ</th><th>Drawdown</th><th>เทียบถือเดิม</th></tr></thead><tbody>${game.history.map(item=>`<tr><td>${item.round}</td><td>${escapeHtml(item.title)}</td><td>${escapeHtml(DECISION_MODES[item.decision_mode].label)}</td><td class="${item.change_bps>=0?'gain':'loss'}">${percentLabel(item.change_bps)}</td><td>${(item.drawdown_bps/100).toFixed(1)}%</td><td class="${BigInt(item.decision_delta_satang)>=0n?'gain':'loss'}">${signedBaht(item.decision_delta_satang)}</td></tr>`).join('')}</tbody></table></div></section>
     <section class="reflection-card"><h2>IC debrief</h2><ol><li>Funding risk ทำให้คุณเปลี่ยนการตัดสินใจต่างจากการดูผลตอบแทนอย่างไร</li><li>ไตรมาสใด turnover สูง แต่ผลเทียบถือเดิมไม่ได้ดีขึ้น</li><li>พอร์ตละเมิดกรอบ drawdown เพราะ allocation เดิมหรือเพราะคุณเพิ่มความเสี่ยงหลังตลาดขึ้น</li></ol></section><div class="lab-action-row"><button class="secondary" data-action="save-investment-result">บันทึก audit</button><button class="secondary" data-action="reset-investment-sim">สร้าง mandate ใหม่</button><button class="primary" data-action="open-course" data-course="investing">เรียนหลักการลงทุน <span>→</span></button></div></section>${investmentSources()}`;
   }
   const scenario = tape.rounds[game.round]; const last = game.history.at(-1); const currentTotal = gameTotal(game);
   const weights = portfolioWeights(game.holdings); const decision = state.investmentDecision;
-  return `<section class="ic-terminal-head"><button class="breadcrumb" data-screen="home">← หน้าหลัก</button><div><span class="eyebrow">INVESTMENT COMMITTEE · Q${game.round+1}/12</span><h1>${escapeHtml(scenario.title)}</h1><p>${escapeHtml(scenario.signal)}</p></div><div class="ic-terminal-value"><span>Portfolio NAV</span><strong>${formatBaht(currentTotal)}</strong><small>Peak ${formatBaht(BigInt(game.peak_satang))} · เงินเติม Q ละ ${formatBaht(BigInt(game.monthly_contribution_satang)*3n)}</small></div></section>
+  return `${renderLabJourney({ topic: 'investing', activeStage: 1, status: `ไตรมาส ${game.round + 1} จาก 12: ตัดสินใจ แล้วอ่านผลลัพธ์และ audit`, stages: investmentJourneyStages() })}<section class="ic-terminal-head"><button class="breadcrumb" data-screen="home">← หน้าหลัก</button><div><span class="eyebrow">INVESTMENT COMMITTEE · Q${game.round+1}/12</span><h1>${escapeHtml(scenario.title)}</h1><p>${escapeHtml(scenario.signal)}</p></div><div class="ic-terminal-value"><span>Portfolio NAV</span><strong>${formatBaht(currentTotal)}</strong><small>Peak ${formatBaht(BigInt(game.peak_satang))} · เงินเติม Q ละ ${formatBaht(BigInt(game.monthly_contribution_satang)*3n)}</small></div></section>
   <section class="ic-macro-board">${Object.entries(scenario.macro).map(([key,value])=>`<div><span>${escapeHtml(({growth:'Growth',inflation:'Inflation',policy_rate:'Policy rate',usdthb:'THB/FX',valuation:'Valuation'})[key]||key)}</span><b>${escapeHtml(value)}</b></div>`).join('')}<small>ข้อมูลใน market tape ที่คณะกรรมการเห็นก่อนส่งคำสั่ง · ผลตอบแทนยังถูกซ่อน</small></section>
   <div class="ic-terminal-layout"><main><section class="ic-order-ticket"><div class="section-heading"><div><span class="eyebrow">ORDER TICKET</span><h2>คุณมีอำนาจเลือกทั้งสัดส่วนและวิธีลงมือ</h2></div><span class="ic-order-state">Allocation ${allocationTotal(decision.allocation)}%</span></div><div class="ic-preset-row">${presetCards('', 'decision')}</div>${allocationEditor(decision.allocation,'decision_alloc')}<h3>Execution policy</h3><div class="ic-mode-grid">${Object.entries(DECISION_MODES).map(([key,item])=>`<button class="${decision.mode===key?'selected':''}" data-action="select-decision-mode" data-mode="${key}"><b>${escapeHtml(item.label)}</b><span>${escapeHtml(item.note)}</span></button>`).join('')}</div>${diagnosticsPanel(decision.allocation)}<button class="primary ic-submit-order" data-action="advance-investment-sim">ส่งคำสั่ง Q${game.round+1} และเปิดผลตลาด <span>→</span></button><p class="lab-safety">ระบบคิดเงินเติม ค่าธรรมเนียมรายสินทรัพย์ platform fee, turnover cost, inflation และ counterfactual “ถ้าถือเดิม” ทุกไตรมาส</p></section>${lastRoundReview(last)}</main>
   <aside><section class="ic-monitor"><span class="eyebrow">PORTFOLIO MONITOR</span>${investmentChart(game)}<h3>น้ำหนักจริงหลังราคาเคลื่อน</h3>${allocationBars(weights,true)}<div class="monitor-stats"><div><span>P&amp;L ต่อเงินที่ใส่</span><b>${percentLabel(summary.total_return_bps)}</b></div><div><span>Max drawdown</span><b class="${summary.max_drawdown_bps>summary.risk_limit_bps?'over-risk':''}">${(summary.max_drawdown_bps/100).toFixed(1)}%</b></div><div><span>Fee สะสม</span><b>${formatBaht(summary.total_fees_satang)}</b></div></div></section><section class="ic-mandate-card"><b>Mandate guardrails</b><p>เป้าหมาย ${formatBaht(BigInt(game.goal_satang))} ใน ${game.goal_horizon_years} ปี</p><p>Drawdown limit ${(game.max_drawdown_limit_bps/100).toFixed(1)}%</p><p>Emergency fund ${game.emergency_months} เดือน · Debt APR ${(game.high_interest_debt_apr_bps/100).toFixed(1)}%</p></section></aside></div>${investmentSources()}`;
@@ -695,7 +812,7 @@ function consentView() {
 }
 
 function moneyIntakeView() {
-  return `${progressHeader(1, 'เงินเดือนหนึ่งเดือนเหลือเท่าไรจริง', 'เริ่มจากค่าอยู่รอดก่อนหนี้ เพื่อไม่สร้างแผนที่จ่ายแล้วอยู่ไม่ได้')}
+  return `${debtJourney(0, 'เริ่มจากข้อมูลขั้นต่ำที่ทำให้ระบบไม่เดาทางแก้')} ${progressHeader(1, 'เงินเดือนหนึ่งเดือนเหลือเท่าไรจริง', 'เริ่มจากค่าอยู่รอดก่อนหนี้ เพื่อไม่สร้างแผนที่จ่ายแล้วอยู่ไม่ได้')}
   <div class="form-grid">
     ${inputField('monthlyTakeHome', 'รายรับสุทธิต่อเดือน', { placeholder: '25,000' })}
     ${inputField('essentialLivingCosts', 'ค่าอยู่รอดจำเป็นต่อเดือน', { placeholder: '14,000', hint: 'บ้าน อาหาร เดินทาง ค่าน้ำไฟ และการรักษา' })}
@@ -752,7 +869,7 @@ function statusIntakeView() {
     ['enforcement', 'มีหนังสือบังคับคดี/อายัด'],
     ['unknown', 'ไม่แน่ใจ']
   ];
-  return `${progressHeader(2, 'ตอนนี้เคสอยู่จุดไหน', 'คำตอบนี้สำคัญกว่า “เป็นหนี้ดีหรือหนี้เสีย” เพราะกำหนด deadline และช่องทางช่วยเหลือ')}
+  return `${debtJourney(0, 'กำลังระบุความเร่งด่วนและขั้นกฎหมายของแต่ละบัญชี')} ${progressHeader(2, 'ตอนนี้เคสอยู่จุดไหน', 'คำตอบนี้สำคัญกว่า “เป็นหนี้ดีหรือหนี้เสีย” เพราะกำหนด deadline และช่องทางช่วยเหลือ')}
   <section class="question-block" data-field-anchor="overdueBand"><h2>บัญชีที่ค้างนานที่สุด</h2><div class="choice-grid">${overdue.map(([v,t,n]) => radioCard('overdueBand',v,t,n,i.overdueBand===v)).join('')}</div></section>
   <section class="question-block" data-field-anchor="legalStages"><h2>มีเอกสารหรือขั้นกฎหมายอะไรบ้าง</h2><p class="muted">เลือกได้หลายข้อเมื่อคนละบัญชีหรือมีเอกสารมากกว่าหนึ่งขั้น ระบบจะใช้ขั้นที่เร่งด่วนที่สุดเพื่อไม่ให้พลาด deadline</p><div class="choice-grid compact">${legal.map(([v,t]) => checkboxCard('legalStages',v,t,(i.legalStages || []).includes(v))).join('')}</div></section>
   <button class="primary" data-action="status-next">ต่อไป: รายละเอียดบัญชี <span>→</span></button>`;
@@ -766,7 +883,7 @@ function detailsIntakeView() {
   const hasEnforcement = (i.legalStages || []).some((value) => ['judgment','enforcement'].includes(value));
   const clinic = i.overdueBand === '120_plus';
   const clearDebt = i.overdueBand === '90_119' || i.overdueBand === '120_plus';
-  return `${progressHeader(3, 'เติมเฉพาะข้อมูลที่เปลี่ยนทางแก้', 'ไม่รู้ช่องไหนให้เว้นไว้ ระบบจะแสดง checklist แทนการเดา')}
+  return `${debtJourney(1, 'เติมเฉพาะข้อมูลที่เปลี่ยน route หรือการติดตามผล')} ${progressHeader(3, 'เติมเฉพาะข้อมูลที่เปลี่ยนทางแก้', 'ไม่รู้ช่องไหนให้เว้นไว้ ระบบจะแสดง checklist แทนการเดา')}
   <section class="question-block" data-field-anchor="debtTypes"><h2>ประเภทหนี้ที่คุณมีทั้งหมด</h2><p class="muted">เลือกได้หลายข้อ เพราะสิทธิ์บางโครงการใช้ “ทุกบัญชี” ไม่ใช่เฉพาะบัญชีหลัก</p><div class="choice-grid compact">${debtTypes.map(([v,t]) => checkboxCard('debtTypes',v,t,(i.debtTypes || []).includes(v))).join('')}</div></section>
   ${yesNoBlock('debtTypesComplete','เลือกประเภทหนี้ครบทุกบัญชีแล้วหรือยัง',i.debtTypesComplete)}
   ${creditorPicker()}
@@ -824,7 +941,7 @@ function snapshotChart() {
 function portfolioView() {
   const debts = state.debts || [];
   const total = reportedDebtTotal();
-  return `<section class="portfolio-hero"><div><span class="eyebrow">DEBT MAP</span><h1>เห็นทุกก้อน ก่อนเลือกว่าจะจ่ายแบบไหน</h1><p>APR, minimum และวันครบกำหนดคือข้อมูลที่ทำให้แผนต่างจากการเดา</p></div><button class="secondary" data-action="add-debt">+ เพิ่มบัญชี</button></section>
+  return `${debtJourney(debts.length ? 1 : 0, debts.length ? 'มีข้อมูลบัญชีแล้ว: อัปเดตผลจริงเพื่อเห็นแนวโน้ม' : 'เพิ่มบัญชีแรกเพื่อเปลี่ยนข้อมูลรวมเป็นแผนที่ใช้ได้')}<section class="portfolio-hero"><div><span class="eyebrow">DEBT MAP</span><h1>เห็นทุกก้อน ก่อนเลือกว่าจะจ่ายแบบไหน</h1><p>APR, minimum และวันครบกำหนดคือข้อมูลที่ทำให้แผนต่างจากการเดา</p></div><button class="secondary" data-action="add-debt">+ เพิ่มบัญชี</button></section>
   <section class="portfolio-summary"><div><span>ยอดที่รายงาน</span><strong>${formatBaht(total)}</strong><small>${debts.length} บัญชี</small></div><div class="snapshot-panel"><span class="eyebrow">PROGRESS</span>${snapshotChart()}<button class="text-action" data-action="save-snapshot" ${debts.length?'':'disabled'}>บันทึกยอดวันนี้ →</button></div></section>
   ${debts.length ? `<div class="debt-card-grid">${debts.map((debt) => {
     const missing = [!debt.aprPercent && 'APR', !debt.minimum && 'ยอดขั้นต่ำ', !debt.dueDay && 'วันครบกำหนด'].filter(Boolean);
@@ -862,7 +979,7 @@ function remindersView() {
 
 function payoffView() {
   const debts = state.debts || [];
-  if (!debts.length) return `<section class="empty-history"><div>↔</div><h1>ยังไม่มีหนี้ให้จำลอง</h1><p>เพิ่มบัญชีพร้อมยอดคงเหลือ APR และยอดขั้นต่ำก่อน</p><button class="primary" data-action="add-debt">เพิ่มบัญชี <span>→</span></button></section>`;
+  if (!debts.length) return `${debtJourney(1, 'ต้องมีข้อมูลบัญชีขั้นต่ำก่อนจึงจะจำลองได้')}<section class="empty-history"><div>↔</div><h1>ยังไม่มีหนี้ให้จำลอง</h1><p>เพิ่มบัญชีพร้อมยอดคงเหลือ APR และยอดขั้นต่ำก่อน</p><button class="primary" data-action="add-debt">เพิ่มบัญชี <span>→</span></button></section>`;
   const missing = debts.flatMap((debt) => [
     !debt.balance && `${debt.creditorName}: ยอดคงเหลือ`,
     !debt.aprPercent && `${debt.creditorName}: APR/EIR`,
@@ -882,7 +999,7 @@ function payoffView() {
   ] : [];
   const paidMonths = scenarios.map(([key])=>comparison[key].payoff_month_count || 0);
   const maxMonths = Math.max(1,...paidMonths);
-  return `<section class="payoff-hero"><div><span class="eyebrow">PAYOFF LAB</span><h1>เทียบทางเลือกด้วยงบต่อเดือนเท่าเดิม</h1><p>เป็นประมาณการเพื่อถามคำถามให้ถูก ไม่ใช่คำรับรองยอดจริงหรือข้อเสนอจากเจ้าหนี้</p></div><div class="lab-orb">↔</div></section>
+  return `${debtJourney(1, missing.length || calculationError ? 'ข้อมูลหรือการคำนวณยังไม่พร้อม: แก้เฉพาะช่องที่ระบบระบุ' : 'ผลเทียบพร้อมแล้ว แต่ยังเป็นการจำลองเพื่อเลือกสิ่งที่จะทำ ไม่ใช่ผลลัพธ์จริง')}<section class="payoff-hero"><div><span class="eyebrow">PAYOFF LAB</span><h1>เทียบทางเลือกด้วยงบต่อเดือนเท่าเดิม</h1><p>เป็นประมาณการเพื่อถามคำถามให้ถูก ไม่ใช่คำรับรองยอดจริงหรือข้อเสนอจากเจ้าหนี้</p></div><div class="lab-orb">↔</div></section>
   <section class="lab-controls card"><label class="input-card" for="extraPayment"><span>เงินเพิ่มต่อเดือน</span><small>นอกเหนือจากยอดขั้นต่ำทุกบัญชี</small><input id="extraPayment" inputmode="decimal" value="${escapeHtml(state.extraPayment)}" placeholder="500"></label>
     <label class="toggle-control"><input id="restructureEnabled" type="checkbox" ${state.restructureEnabled?'checked':''}> มีข้อเสนอปรับโครงสร้างจริงให้เทียบ</label>
     ${state.restructureEnabled ? `<div class="restructure-grid"><label>บัญชี<select id="restructureDebtId"><option value="">เลือกบัญชี</option>${debts.map(debt=>`<option value="${debt.id}" ${state.restructureDebtId===debt.id?'selected':''}>${escapeHtml(debt.creditorName)}</option>`).join('')}</select></label><label>APR ใหม่ (%)<input id="restructureApr" inputmode="decimal" value="${escapeHtml(state.restructureApr)}"></label><label>ค่างวดใหม่<input id="restructurePayment" inputmode="decimal" value="${escapeHtml(state.restructurePayment)}"></label></div>` : ''}
@@ -928,7 +1045,7 @@ function diagnosisView() {
   const missing = result.missing_fields.map((field) => ({ field, label: FIELD_LABELS[field] || field }));
   const negative = result.safety_flags.includes('negative_cash_before_debt');
   if (currentUser && state.assessmentSaved === null) persistAssessment(assessment);
-  return `<section class="diagnosis-hero ${meta.tone}">
+  return `${debtJourney(1, missing.length ? 'มีข้อมูลที่ต้องตรวจเพิ่มก่อนยืนยันสิทธิ์หรือ deadline' : 'ได้ route แล้ว: อ่านเหตุผลและใช้ Action Pack ตามลำดับ')}<section class="diagnosis-hero ${meta.tone}">
     <div><span class="route-pill">${escapeHtml(meta.label)}</span><h1>${escapeHtml(meta.title)}</h1>
       <p>ระบบเลือก route จากวันค้าง ขั้นกฎหมาย ประเภทหนี้ และเงินก่อนจ่ายหนี้</p></div>
     <div class="route-gauge" aria-label="สถานะ ${escapeHtml(meta.label)}"><span>${negative?'!':'✓'}</span><small>${negative?'ต้องขอความช่วยเหลือก่อน':'มีทางทำต่อ'}</small></div>
@@ -966,7 +1083,9 @@ function actionPlanView() {
   if (assessment.error) return errorPanel(assessment.error);
   const meta = ROUTE_META[assessment.result.route];
   const statuses = [['not_started','ยังไม่เริ่ม'],['contacted','ติดต่อแล้ว'],['submitted','ส่งเอกสารแล้ว'],['documented','ได้หลักฐานแล้ว']];
-  return `<section class="action-plan-hero"><span class="eyebrow">ACTION PLAN</span><h1>${escapeHtml(meta.title)}</h1><p>ทำตามลำดับ แล้วบันทึกสิ่งที่เกิดขึ้นจริง</p></section>
+  const journeyStage = state.actionStatus === 'documented' && state.actionEvidence.trim() ? 2 : 1;
+  const journeyStatus = journeyStage === 2 ? 'บันทึกผลติดต่อแล้ว: ใช้หลักฐานนี้กำหนดสิ่งที่ต้องติดตามต่อ' : 'เริ่มข้อแรกก่อน แล้วบันทึกสิ่งที่เกิดขึ้นจริง';
+  return `${debtJourney(journeyStage, journeyStatus)}<section class="action-plan-hero"><span class="eyebrow">ACTION PLAN</span><h1>${escapeHtml(meta.title)}</h1><p>ทำตามลำดับ แล้วบันทึกสิ่งที่เกิดขึ้นจริง</p></section>
   <section class="action-checklist">${meta.checklist.map((item,index)=>`<article><span>${String(index+1).padStart(2,'0')}</span><div><b>${escapeHtml(item)}</b><small>${index===0?'เริ่มข้อนี้ก่อน':'ทำเมื่อข้อก่อนหน้าพร้อม'}</small></div></article>`).join('')}</section>
   <section class="outcome-recorder card"><span class="eyebrow">บันทึกผลจริง</span><h2>ตอนนี้ไปถึงขั้นไหนแล้ว</h2>
     <div class="status-grid">${statuses.map(([value,label])=>radioCard('actionStatus',value,label,'',state.actionStatus===value)).join('')}</div>
@@ -981,8 +1100,32 @@ const courseGraphic = (courseId) => ({
   debt: './assets/lessons/debt-triage.png'
 })[courseId];
 
+const courseIcon = (courseId) => renderIcon(courseId === 'tax' ? 'tax' : courseId === 'investing' ? 'invest' : 'debt');
+
 function curriculumRecord(unitId) {
   return state.curriculumProgress?.[unitId] || { status: 'not_started', step: 0, bestScore: 0 };
+}
+
+function academyResume() {
+  return resolveAcademyResume(state);
+}
+
+function rememberAcademyScreen(screen, unit = unitById(state.currentUnitId), step = state.lessonStep) {
+  state.learningResume = unit
+    ? { kind: 'canonical', unitId: unit.id, screen, step: Number(step || 0), updatedAt: new Date().toISOString() }
+    : { kind: 'canonical', screen: 'learning-progress', updatedAt: new Date().toISOString() };
+}
+
+function openAcademyResume() {
+  const resume = academyResume();
+  const unit = unitById(resume.unitId);
+  if (unit) {
+    state.selectedCourse = unit.course;
+    state.currentUnitId = unit.id;
+    state.lessonStep = Math.max(0, Math.min(Number(resume.step || 0), Math.max(0, unit.steps.length - 1)));
+  }
+  state.screen = resume.screen;
+  state.notice = '';
 }
 
 function progressLabel(record) {
@@ -999,42 +1142,42 @@ function learnView() {
   const assessment = currentAssessment();
   const route = assessment.error ? ROUTES.PREVENTION : assessment.result.route;
   const contextual = unitsForRoute(route);
-  const routeUnit = contextual[0];
+  const routeUnit = state.consent ? contextual[0] : null;
   const allCompleted = COURSES.reduce((sum, course) => sum + courseStats(course.id, state.curriculumProgress).completed, 0);
-  const storedUnit = unitById(state.currentUnitId);
-  const storedRecord = storedUnit ? curriculumRecord(storedUnit.id) : null;
-  const current = storedUnit && Number(storedRecord.bestScore || 0) < PASSING_SCORE
-    ? storedUnit
-    : firstAvailableUnit(courseById(storedUnit?.course || state.selectedCourse));
+  const resumeState = academyResume();
+  const current = unitById(resumeState.unitId) || firstAvailableUnit(courseById(state.selectedCourse));
   const currentCourse = courseById(current.course);
   const currentRecord = curriculumRecord(current.id);
+  const resumeLabel = resumeState.screen === 'course-lesson' && currentRecord.status === 'not_started'
+    ? allCompleted ? 'เริ่มบทเรียนถัดไป' : 'เริ่มบทเรียนแรก'
+    : academyResumeLabel(resumeState, current);
   const overall = Math.round((allCompleted / 18) * 100);
   return `<section class="academy-hero">
     <div><span class="eyebrow">FIRST JOBBER MONEY LAB · 3 หลักสูตร · 18 ระดับ</span><h1>เรียนเรื่องเงินให้ตัดสินใจเองได้</h1><p>เรียนตามลำดับจากพื้นฐานไปถึงระบบแบบมืออาชีพ ทุกระดับมีตัวอย่าง แบบฝึกหัด Quiz และงานที่ใช้กับชีวิตจริง</p>
-      <button class="primary" data-action="open-unit" data-unit="${current.id}">${currentRecord.status === 'not_started' ? 'เริ่มเรียน' : 'เรียนต่อ'}: ${escapeHtml(current.title)} <span>→</span></button>
+      <button class="primary" data-action="resume-learning">${escapeHtml(resumeLabel)}: ${escapeHtml(current.title)} <span>→</span></button>
     </div>
-    <div class="academy-score" style="--academy-progress:${overall}%"><strong>${overall}%</strong><span>ผ่าน ${allCompleted} จาก 18 ระดับ</span><small>เกณฑ์ผ่าน 2/3 ต่อระดับ</small></div>
+    <div class="academy-score" style="--academy-progress:${overall}%" role="progressbar" aria-label="ความก้าวหน้าการเรียนทั้งหมด" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${overall}" aria-valuetext="ผ่าน ${allCompleted} จาก 18 ระดับ"><strong>${overall}%</strong><span>ผ่าน ${allCompleted} จาก 18 ระดับ</span><small>เกณฑ์ผ่าน 2/3 ต่อระดับ</small></div>
   </section>
   <section class="learning-principles" aria-label="รูปแบบการเรียน"><div><b>01</b><span>เรียนทีละแนวคิด</span></div><div><b>02</b><span>ดูตัวอย่างที่คำนวณให้</span></div><div><b>03</b><span>ตอบคำถามและลงมือทำ</span></div></section>
   <div class="academy-course-grid">${COURSES.map((course) => {
     const stats = courseStats(course.id, state.curriculumProgress);
     const next = firstAvailableUnit(course);
     return `<article class="academy-course ${course.color}">
-      <div class="course-cover"><img src="${courseGraphic(course.id)}" alt="" loading="lazy"><span class="course-symbol">${course.icon}</span></div>
+      <div class="course-cover"><img src="${courseGraphic(course.id)}" alt="" loading="lazy"><span class="course-symbol">${courseIcon(course.id)}</span></div>
       <div class="course-copy"><span class="eyebrow">หลักสูตร · ${course.units.length} ระดับ · ${stats.completed}/${stats.total} ผ่าน</span><h2>${escapeHtml(course.title)}</h2><p>${escapeHtml(course.description)}</p>
         <div class="level-dots" aria-label="ผ่าน ${stats.completed} จาก ${stats.total} ระดับ">${course.units.map((unit) => `<i class="${Number(curriculumRecord(unit.id).bestScore || 0) >= PASSING_SCORE ? 'done' : isUnitUnlocked(unit, state.curriculumProgress) ? 'open' : 'locked'}"></i>`).join('')}</div>
         <div class="course-card-actions"><button class="secondary" data-action="open-course" data-course="${course.id}">ดูแผนการเรียน <span>→</span></button>${course.id === 'tax' ? '<button class="tool-shortcut" data-screen="tax-lab">เปิด Tax Lab</button>' : course.id === 'investing' ? '<button class="tool-shortcut" data-screen="invest-sim">เปิด Simulator</button>' : ''}</div><small>ระดับถัดไป: ${escapeHtml(next.title)}</small>
       </div>
     </article>`;
   }).join('')}</div>
-  ${routeUnit ? `<section class="context-lesson"><div><span class="eyebrow">บทเรียนตามสถานการณ์ของคุณ · ${routeUnit.duration_minutes} นาที</span><h2>${escapeHtml(routeUnit.decision)}</h2><p>${escapeHtml(routeUnit.action.label)}</p></div><button class="secondary" data-action="open-lesson" data-lesson="${routeUnit.id}">เปิดบทเร่งด่วน →</button></section>` : ''}`;
+  ${routeUnit ? `<section class="context-lesson"><div><span class="eyebrow">เส้นทางช่วยเหลือตามสถานการณ์ · ${routeUnit.duration_minutes} นาที</span><h2>${escapeHtml(routeUnit.decision)}</h2><p>${escapeHtml(routeUnit.action.label)}</p><small>เนื้อหานี้เป็นคนละส่วนกับ Course ปกติ เพราะอ้างอิงสถานะหนี้ที่คุณให้ไว้</small></div><button class="secondary" data-action="open-lesson" data-lesson="${routeUnit.id}">เปิดคู่มือเฉพาะกรณี →</button></section>` : ''}`;
 }
 
 function courseView() {
   const course = courseById(state.selectedCourse);
   const stats = courseStats(course.id, state.curriculumProgress);
   const next = firstAvailableUnit(course);
-  return `<section class="course-head ${course.color}"><div><button class="breadcrumb" data-screen="learn">← หลักสูตรทั้งหมด</button><span class="eyebrow">${course.icon} ${escapeHtml(course.shortTitle)} · COURSE MAP</span><h1>${escapeHtml(course.title)}</h1><p>${escapeHtml(course.description)}</p></div><div class="course-progress"><strong>${stats.completed}/${stats.total}</strong><span>ระดับที่ผ่าน</span><div><i style="width:${stats.percent}%"></i></div></div></section>
+  return `<section class="course-head ${course.color}"><div><button class="breadcrumb" data-screen="learn">← หลักสูตรทั้งหมด</button><span class="eyebrow course-kicker">${courseIcon(course.id)} ${escapeHtml(course.shortTitle)} · COURSE MAP</span><h1>${escapeHtml(course.title)}</h1><p>${escapeHtml(course.description)}</p></div><div class="course-progress"><strong>${stats.completed}/${stats.total}</strong><span>ระดับที่ผ่าน</span><div role="progressbar" aria-label="ความก้าวหน้าหลักสูตร ${escapeHtml(course.shortTitle)}" aria-valuemin="0" aria-valuemax="${stats.total}" aria-valuenow="${stats.completed}" aria-valuetext="ผ่าน ${stats.completed} จาก ${stats.total} ระดับ"><i style="width:${stats.percent}%"></i></div></div></section>
   <div class="course-map-layout">
     <aside class="course-syllabus"><span class="eyebrow">แผนการเรียน</span>${course.units.map((unit) => {
       const record = curriculumRecord(unit.id);
@@ -1059,7 +1202,7 @@ function renderLessonStep(unit, step, index) {
     const key = `${unit.id}:${index}`;
     const selected = state.practiceAnswers?.[key];
     const answered = Number.isInteger(selected);
-    return `${heading}<section class="inline-practice"><span class="eyebrow">KNOWLEDGE CHECK</span><h2>${escapeHtml(step.question.prompt)}</h2><div class="answer-options">${step.question.options.map((option, optionIndex) => `<button class="answer-option ${answered && optionIndex === selected ? optionIndex === step.question.answer ? 'correct' : 'wrong' : ''}" data-action="answer-practice" data-option="${optionIndex}"><span>${String.fromCharCode(65 + optionIndex)}</span>${escapeHtml(option)}</button>`).join('')}</div>${answered ? `<div class="answer-explanation ${selected === step.question.answer ? 'correct' : 'wrong'}"><b>${selected === step.question.answer ? 'ถูกต้อง' : 'ยังไม่ใช่'}</b><p>${escapeHtml(step.question.explanation)}</p></div>` : '<small>เลือกคำตอบเพื่อดูเหตุผล ไม่หักคะแนน</small>'}</section>`;
+    return `${heading}<section class="inline-practice"><span class="eyebrow">KNOWLEDGE CHECK</span><h2>${escapeHtml(step.question.prompt)}</h2><div class="answer-options">${step.question.options.map((option, optionIndex) => `<button class="answer-option ${answered && optionIndex === selected ? optionIndex === step.question.answer ? 'correct' : 'wrong' : ''}" data-action="answer-practice" data-option="${optionIndex}"><span>${String.fromCharCode(65 + optionIndex)}</span>${escapeHtml(option)}</button>`).join('')}</div>${answered ? `<div class="answer-explanation ${selected === step.question.answer ? 'correct' : 'wrong'}" role="status" aria-live="polite"><b>${selected === step.question.answer ? 'ถูกต้อง' : 'ยังไม่ใช่'}</b><p>${escapeHtml(step.question.explanation)}</p></div>` : '<small>เลือกคำตอบเพื่อดูเหตุผล ไม่หักคะแนน</small>'}</section>`;
   }
   return `${heading}<section class="application-card"><span class="eyebrow">APPLICATION TASK</span><div class="apply-checklist">${step.checklist.map((item, itemIndex) => `<div><span>${itemIndex + 1}</span><p>${escapeHtml(item)}</p></div>`).join('')}</div><div class="artifact-box"><span>ชิ้นงานหลังเรียน</span><b>${escapeHtml(step.artifact)}</b></div></section>`;
 }
@@ -1072,8 +1215,8 @@ function courseLessonView() {
   const step = unit.steps[stepIndex];
   const percent = Math.round(((stepIndex + 1) / unit.steps.length) * 100);
   return `<div class="lesson-player ${course.color}">
-    <aside class="lesson-rail"><button class="breadcrumb" data-action="open-course" data-course="${course.id}">← Course Map</button><span class="eyebrow">${course.icon} ${escapeHtml(course.shortTitle)} · LEVEL ${unit.level}</span><h2>${escapeHtml(unit.title)}</h2><div class="lesson-step-list">${unit.steps.map((item,index) => `<button class="${index === stepIndex ? 'current' : index < stepIndex ? 'read' : ''}" data-action="go-lesson-step" data-step="${index}"><span>${index < stepIndex ? '✓' : index + 1}</span><div><small>${({concept:'แนวคิด',worked_example:'ตัวอย่าง',visual:'ภาพอธิบาย',practice:'แบบฝึก',apply:'ลงมือทำ'})[item.type]}</small><b>${escapeHtml(item.title)}</b></div></button>`).join('')}</div></aside>
-    <article class="lesson-reading"><header class="mobile-lesson-progress"><span>Level ${unit.level} · ${stepIndex + 1}/${unit.steps.length}</span><div><i style="width:${percent}%"></i></div></header>${renderLessonStep(unit, step, stepIndex)}
+    <aside class="lesson-rail"><button class="breadcrumb" data-action="open-course" data-course="${course.id}">← Course Map</button><span class="eyebrow course-kicker">${courseIcon(course.id)} ${escapeHtml(course.shortTitle)} · LEVEL ${unit.level}</span><h2>${escapeHtml(unit.title)}</h2><div class="lesson-step-list">${unit.steps.map((item,index) => `<button class="${index === stepIndex ? 'current' : index < stepIndex ? 'read' : ''}" data-action="go-lesson-step" data-step="${index}"><span>${index < stepIndex ? '✓' : index + 1}</span><div><small>${({concept:'แนวคิด',worked_example:'ตัวอย่าง',visual:'ภาพอธิบาย',practice:'แบบฝึก',apply:'ลงมือทำ'})[item.type]}</small><b>${escapeHtml(item.title)}</b></div></button>`).join('')}</div></aside>
+    <article class="lesson-reading"><header class="mobile-lesson-progress"><span>Level ${unit.level} · ${stepIndex + 1}/${unit.steps.length}</span><div role="progressbar" aria-label="ความคืบหน้าบทเรียน" aria-valuemin="0" aria-valuemax="${unit.steps.length}" aria-valuenow="${stepIndex + 1}" aria-valuetext="ช่วงที่ ${stepIndex + 1} จาก ${unit.steps.length}"><i style="width:${percent}%"></i></div></header>${renderLessonStep(unit, step, stepIndex)}
       <footer class="lesson-controls"><button class="secondary" data-action="lesson-previous" ${stepIndex === 0 ? 'disabled' : ''}>← ย้อนกลับ</button>${stepIndex === unit.steps.length - 1 ? `<button class="primary" data-action="start-course-quiz">ทำ Quiz ${unit.quiz.length} ข้อ <span>→</span></button>` : `<button class="primary" data-action="lesson-next">ช่วงถัดไป <span>→</span></button>`}</footer>
       <div class="lesson-provenance"><span>เนื้อหาจากหนังสือ First Jobber Money Lab · ตรวจทานกับ</span><a href="${unit.source.url}" target="_blank" rel="noreferrer">${escapeHtml(unit.source.owner)} ↗</a><small>ตรวจล่าสุด ${escapeHtml(unit.source.reviewed_date)}</small></div>
     </article>
@@ -1087,14 +1230,62 @@ function courseQuizView() {
   const score = unit.quiz.reduce((sum, question, index) => sum + (Number(answers[index]) === question.answer ? 1 : 0), 0);
   const passed = state.quizSubmitted && score >= PASSING_SCORE;
   return `<article class="course-quiz ${course.color}"><button class="breadcrumb" data-action="return-to-lesson">← กลับไปบทเรียน</button><span class="eyebrow">LEVEL ${unit.level} · UNIT QUIZ</span><h1>${escapeHtml(unit.title)}</h1><p>ตอบ ${unit.quiz.length} ข้อ ต้องได้อย่างน้อย ${PASSING_SCORE}/${unit.quiz.length} เพื่อปลดล็อกระดับถัดไป</p>
-    <div class="quiz-progress"><i style="width:${Math.round((Object.keys(answers).length / unit.quiz.length) * 100)}%"></i></div>
+    <div class="quiz-progress" role="progressbar" aria-label="คำตอบ Quiz ที่เลือกแล้ว" aria-valuemin="0" aria-valuemax="${unit.quiz.length}" aria-valuenow="${Object.keys(answers).length}" aria-valuetext="ตอบแล้ว ${Object.keys(answers).length} จาก ${unit.quiz.length} ข้อ"><i style="width:${Math.round((Object.keys(answers).length / unit.quiz.length) * 100)}%"></i></div>
     <div class="quiz-list">${unit.quiz.map((question,index) => {
       const selected = Number(answers[index]);
       const hasAnswer = Number.isInteger(selected);
-      return `<section class="quiz-question ${state.quizSubmitted ? selected === question.answer ? 'correct' : 'wrong' : ''}"><span>ข้อ ${index + 1}</span><h2>${escapeHtml(question.prompt)}</h2><div class="answer-options">${question.options.map((option,optionIndex) => `<button class="answer-option ${hasAnswer && selected === optionIndex ? 'selected' : ''} ${state.quizSubmitted && optionIndex === question.answer ? 'correct' : ''}" data-action="answer-quiz" data-question="${index}" data-option="${optionIndex}" ${state.quizSubmitted ? 'disabled' : ''}><span>${String.fromCharCode(65 + optionIndex)}</span>${escapeHtml(option)}</button>`).join('')}</div>${state.quizSubmitted ? `<div class="quiz-explanation"><b>${selected === question.answer ? 'ถูกต้อง' : 'คำตอบที่ถูกแสดงด้วยสีเขียว'}</b><p>${escapeHtml(question.explanation)}</p></div>` : ''}</section>`;
+      return `<section class="quiz-question ${state.quizSubmitted ? selected === question.answer ? 'correct' : 'wrong' : ''}"><span>ข้อ ${index + 1}</span><h2>${escapeHtml(question.prompt)}</h2><div class="answer-options">${question.options.map((option,optionIndex) => `<button class="answer-option ${hasAnswer && selected === optionIndex ? 'selected' : ''} ${state.quizSubmitted && optionIndex === question.answer ? 'correct' : ''}" data-action="answer-quiz" data-question="${index}" data-option="${optionIndex}" ${state.quizSubmitted ? 'disabled' : ''}><span>${String.fromCharCode(65 + optionIndex)}</span><span>${state.quizSubmitted && optionIndex === question.answer ? '<b class="answer-status">✓ คำตอบที่ถูก</b>' : state.quizSubmitted && selected === optionIndex ? '<b class="answer-status wrong">✕ คำตอบของคุณ</b>' : ''}${escapeHtml(option)}</span></button>`).join('')}</div>${state.quizSubmitted ? `<div class="quiz-explanation"><b>${selected === question.answer ? 'ถูกต้อง' : 'ยังไม่ถูก — ดูตัวเลือกที่มีเครื่องหมาย ✓'}</b><p>${escapeHtml(question.explanation)}</p></div>` : ''}</section>`;
     }).join('')}</div>
-    ${state.quizSubmitted ? `<section class="quiz-result ${passed ? 'passed' : 'retry'}"><div class="result-score"><strong>${score}/${unit.quiz.length}</strong><span>${passed ? 'ผ่านระดับนี้แล้ว' : 'ยังไม่ผ่าน ลองทบทวนอีกครั้ง'}</span></div><p>${passed ? 'ระดับถัดไปถูกปลดล็อกแล้ว คุณทบทวนบทนี้หรือเดินหน้าต่อได้' : `ต้องได้อย่างน้อย ${PASSING_SCORE}/${unit.quiz.length} ระบบเก็บคะแนนที่ดีที่สุดไว้`}</p><div class="button-row">${passed ? `<button class="secondary" data-action="open-course" data-course="${course.id}">กลับ Course Map</button><button class="primary" data-action="open-next-unit">เรียนระดับถัดไป <span>→</span></button>` : `<button class="secondary" data-action="return-to-lesson">ทบทวนบทเรียน</button><button class="primary" data-action="retry-course-quiz">ทำ Quiz ใหม่</button>`}</div></section>` : `<button class="primary quiz-submit" data-action="submit-course-quiz" ${Object.keys(answers).length === unit.quiz.length ? '' : 'disabled'}>ส่งคำตอบและดูผล <span>→</span></button>`}
+    ${state.quizSubmitted ? `<section id="quiz-result" class="quiz-result ${passed ? 'passed' : 'retry'}" tabindex="-1" role="status" aria-live="polite" aria-atomic="true"><div class="result-score"><strong>${score}/${unit.quiz.length}</strong><span>${passed ? 'ผ่านระดับนี้แล้ว' : 'ยังไม่ผ่าน ลองทบทวนอีกครั้ง'}</span></div><p>${passed ? 'ระดับถัดไปถูกปลดล็อกแล้ว ลองสรุปสิ่งที่ได้ก่อนเดินต่อ' : `ต้องได้อย่างน้อย ${PASSING_SCORE}/${unit.quiz.length} ระบบเก็บคะแนนที่ดีที่สุดไว้`}</p><div class="button-row">${passed ? `<button class="secondary" data-action="open-course" data-course="${course.id}">กลับ Course Map</button><button class="primary" data-action="open-reflection">สรุปบทเรียน 1 นาที <span>→</span></button>` : `<button class="secondary" data-action="return-to-lesson">ทบทวนบทเรียน</button><button class="primary" data-action="retry-course-quiz">ทำ Quiz ใหม่</button>`}</div></section>` : `<button class="primary quiz-submit" data-action="submit-course-quiz" ${Object.keys(answers).length === unit.quiz.length ? '' : 'disabled'}>ส่งคำตอบและดูผล <span>→</span></button>`}
   </article>`;
+}
+
+function lessonReflectionView() {
+  const unit = unitById(state.currentUnitId) || courseById(state.selectedCourse).units[0];
+  const course = courseById(unit.course);
+  const reflection = state.lessonReflections?.[unit.id] || { takeaway: '', nextAction: '' };
+  return `<article class="lesson-reflection ${course.color}"><span class="eyebrow">LEVEL ${unit.level} · REFLECTION</span><h1>หยุดคิด 1 นาที ก่อนเดินต่อ</h1><p>คุณผ่าน Quiz แล้ว ลองสรุปด้วยคำของตัวเองเพื่อเชื่อมบทเรียนกับการตัดสินใจครั้งถัดไป</p>
+    <section class="reflection-prompt"><b>สิ่งที่คุณเพิ่งพิสูจน์ได้</b><span>${escapeHtml(unit.outcome)}</span></section>
+    <label class="input-card" for="reflectionTakeaway"><span>สิ่งที่ฉันเข้าใจที่สุดจากบทนี้</span><small>ไม่บังคับ · บันทึกในอุปกรณ์นี้เท่านั้น</small><textarea id="reflectionTakeaway" rows="3" maxlength="500" placeholder="เช่น ฉันจะดู… ก่อนตัดสินใจ" aria-describedby="reflectionPrivacy">${escapeHtml(reflection.takeaway)}</textarea></label>
+    <label class="input-card" for="reflectionNextAction"><span>ก้าวเล็ก ๆ ที่ฉันจะทำต่อ</span><small>ไม่บังคับ · เขียนให้ทำได้จริงภายในสัปดาห์นี้</small><textarea id="reflectionNextAction" rows="3" maxlength="500" placeholder="เช่น เปิด statement แล้วจด…" aria-describedby="reflectionPrivacy">${escapeHtml(reflection.nextAction)}</textarea></label>
+    <p id="reflectionPrivacy" class="reflection-privacy">ข้อความนี้ไม่ถูกส่งไปที่ server และคุณลบข้อมูลในอุปกรณ์ได้จากเมนูข้อมูลและความเป็นส่วนตัว</p>
+    <div class="button-row"><button class="secondary" data-action="skip-reflection">ข้ามก่อน</button><button class="primary" data-action="save-reflection">บันทึกและเลือกงานที่จะทำ <span>→</span></button></div>
+  </article>`;
+}
+
+function courseActionView() {
+  const unit = unitById(state.currentUnitId) || courseById(state.selectedCourse).units[0];
+  const course = courseById(unit.course);
+  if (Number(curriculumRecord(unit.id).bestScore || 0) < PASSING_SCORE) {
+    return `<section class="locked-unit"><span>!</span><h1>ยังเลือก action ไม่ได้</h1><p>ทำ Quiz ให้ผ่านก่อน ระบบจึงจะนับว่าคุณเข้าใจบทนี้</p><button class="primary" data-action="resume-learning">กลับไปเรียน</button></section>`;
+  }
+  const applyStep = unit.steps.find((step) => step.type === 'apply') || unit.steps.at(-1);
+  const reflection = state.lessonReflections?.[unit.id] || {};
+  const actionRecord = normalizeLearningAction(state.learningActions?.[unit.id]);
+  const suggested = actionRecord.note || reflection.nextAction || applyStep.artifact || applyStep.title;
+  return `<article class="course-action ${course.color}"><span class="eyebrow">LEVEL ${unit.level} · ACTION BRIDGE</span><h1>เปลี่ยนบทเรียนเป็นงานจริง 1 อย่าง</h1><p>การผ่าน Quiz บอกว่าคุณเข้าใจ ส่วนการทำงานนี้จะถูกบันทึกแยก ไม่นำไปปลอมเป็นคะแนนผ่าน</p>
+    <section class="action-brief"><div><span class="eyebrow">RECOMMENDED TASK</span><h2>${escapeHtml(applyStep.title)}</h2><p>${escapeHtml(applyStep.lead || unit.outcome)}</p></div><ol>${(applyStep.checklist || []).slice(0, 4).map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ol></section>
+    <label class="input-card" for="academyActionNote"><span>งานหนึ่งอย่างที่ฉันจะทำภายใน 7 วัน</span><small>แก้ให้เป็นภาษาของคุณได้ · บันทึกในอุปกรณ์</small><textarea id="academyActionNote" rows="4" maxlength="500" placeholder="เช่น เปิด statement แล้วทำตารางหนี้ก่อนวันศุกร์">${escapeHtml(suggested)}</textarea></label>
+    <div class="action-artifact"><span>ผลลัพธ์ที่ควรได้</span><b>${escapeHtml(applyStep.artifact || unit.outcome)}</b></div>
+    <div class="button-row"><button class="secondary" data-action="skip-course-action">ยังไม่วางแผนตอนนี้</button><button class="primary" data-action="save-course-action">บันทึก action และดูความก้าวหน้า <span>→</span></button></div>
+  </article>`;
+}
+
+function learningProgressView() {
+  const totals = COURSES.reduce((memo, course) => {
+    const stats = courseStats(course.id, state.curriculumProgress);
+    memo.completed += stats.completed; memo.total += stats.total;
+    return memo;
+  }, { completed: 0, total: 0 });
+  const percent = totals.total ? Math.round((totals.completed / totals.total) * 100) : 0;
+  return `<section class="learning-progress-hero"><span class="eyebrow">LEARNING PROGRESS</span><h1>ความก้าวหน้าของคุณ</h1><p>นับเฉพาะระดับที่ทำ Quiz ผ่านแล้ว ไม่ได้นับแค่การเปิดบทเรียน</p><div class="learning-progress-score"><strong>${percent}%</strong><div><b>${totals.completed}/${totals.total} ระดับผ่านแล้ว</b><span>เกณฑ์ผ่านระดับละ ${PASSING_SCORE}/3</span></div></div></section>
+  <section class="progress-course-list">${COURSES.map((course) => {
+    const stats = courseStats(course.id, state.curriculumProgress);
+    const next = firstAvailableUnit(course);
+    const actionCount = course.units.filter((unit) => ['planned', 'evidence_recorded'].includes(normalizeLearningAction(state.learningActions?.[unit.id]).status)).length;
+    return `<article class="progress-course ${course.color}"><div class="progress-course-head"><span class="course-symbol">${courseIcon(course.id)}</span><div><span class="eyebrow">${escapeHtml(course.shortTitle)}</span><h2>${escapeHtml(course.title)}</h2><p>${stats.completed}/${stats.total} ระดับผ่านแล้ว · วาง action ${actionCount} งาน</p></div></div><div class="progress-track" role="progressbar" aria-label="ความก้าวหน้า ${escapeHtml(course.shortTitle)}" aria-valuemin="0" aria-valuemax="${stats.total}" aria-valuenow="${stats.completed}" aria-valuetext="ผ่าน ${stats.completed} จาก ${stats.total} ระดับ"><i style="width:${stats.percent}%"></i></div><div class="progress-course-foot"><span>ถัดไป: ${escapeHtml(next.title)}</span><button class="secondary" data-action="open-course" data-course="${course.id}">เปิดแผน →</button></div></article>`;
+  }).join('')}</section>
+  <section class="progress-history-link"><div><span class="eyebrow">LIFE ACTIONS</span><h2>ความคืบหน้าจากชีวิตจริง</h2><p>การติดต่อเจ้าหนี้ บันทึก Tax Lab และผลจำลองลงทุนยังอยู่ในประวัติเดิมของคุณ</p></div><button class="secondary" data-screen="history">ดูประวัติ →</button></section>`;
 }
 
 function lessonView() {
@@ -1107,7 +1298,7 @@ function lessonView() {
   const evidenceHint = unit.evidence_hint || 'เช่น เลขรับเรื่อง วันที่นัด หรือชื่อเอกสาร—ห้ามใส่ OTP';
   const evidencePlaceholder = unit.evidence_placeholder || 'เลขรับเรื่อง / วันนัด / เอกสารที่ได้รับ';
   const disclaimer = unit.sections?.length ? 'เนื้อหานี้เป็นความรู้ทั่วไป ตัวเลขภาษี ผลตอบแทน และเงื่อนไขผลิตภัณฑ์อาจเปลี่ยนได้ ควรตรวจแหล่งข้อมูลทางการก่อนตัดสินใจจริง' : 'เนื้อหานี้ช่วยเตรียมข้อมูลและคำถาม ไม่รับรองสิทธิ์ ผลการเจรจา หรือผลคดี';
-  return `<article class="lesson-detail"><span class="eyebrow">บทเรียน · ${unit.duration_minutes} นาที · ${progressLabel}</span><h1>${escapeHtml(title)}</h1>
+  return `<article class="lesson-detail"><div class="context-path-label"><span>คู่มือเฉพาะกรณี</span><p>เส้นทางนี้ใช้สถานะหนี้ที่คุณให้ไว้ และไม่ได้ใช้แทนคะแนน Course</p></div><span class="eyebrow">บทเร่งด่วน · ${unit.duration_minutes} นาที · ${progressLabel}</span><h1>${escapeHtml(title)}</h1>
     ${lessonBody}
     ${infographicBody}
     <section class="knowledge-check"><span class="eyebrow">เช็กความเข้าใจ 1 ข้อ</span><h2>${escapeHtml(unit.question)}</h2>${state.lessonAnswerRevealed?`<div class="answer-box"><b>คำตอบ</b><p>${escapeHtml(unit.answer)}</p></div>`:`<button class="secondary" data-action="reveal-answer">ดูคำตอบ</button>`}</section>
@@ -1130,6 +1321,7 @@ function dataView() {
     <div class="data-row"><div><b>Sync ข้ามอุปกรณ์</b><span>${LOCAL_ONLY_DISTRIBUTION ? 'รุ่นเว็บสาธารณะ/APK เก็บข้อมูลไว้ในอุปกรณ์นี้' : currentUser ? (state.assessmentSaved===true?'เชื่อมแล้ว':'พร้อมเมื่อบันทึกแผน') : (sessionChecked?'ต้องยืนยันอีเมล':'กำลังตรวจ session')}</span></div><span class="status-dot">${currentUser && state.assessmentSaved===true?'บันทึกแล้ว':'Local'}</span></div>
     <div class="data-row"><div><b>ข้อมูลที่ไม่เก็บใน Route Check</b><span>OTP · รหัสผ่าน · เลขบัตรเต็ม</span></div></div>
     <div class="data-row"><div><b>Pilot metrics ในอุปกรณ์</b><span>${state.pilotEvents.length} events · ไม่มีจำนวนเงินดิบ</span></div><span class="status-dot">Local</span></div>
+    <section class="pilot-entry"><span class="eyebrow">RESEARCH MODE</span><h2>ทดสอบ Pilot สำหรับผู้ดำเนินการ</h2><p>ใช้โจทย์ 5 งานและ export แบบไม่รวมจำนวนเงิน อีเมล หรือข้อความที่ผู้ใช้พิมพ์</p><button class="secondary" data-screen="pilot">${pilotSession()?.finished_at ? 'ดู Pilot ที่จบแล้ว' : pilotSession() ? 'กลับไป Pilot ที่กำลังทำ' : 'เริ่ม Pilot'}</button></section>
     ${LOCAL_ONLY_DISTRIBUTION
       ? `<div class="session-card"><span class="eyebrow">LOCAL-FIRST RELEASE</span><h2>ใช้งานได้โดยไม่ต้องสร้างบัญชี</h2><small>ข้อมูลภาษี พอร์ตจำลอง แผนหนี้ และความคืบหน้าบทเรียนอยู่ในอุปกรณ์นี้เท่านั้น คุณดาวน์โหลดสำเนา JSON ได้ด้านล่าง</small></div>`
       : currentUser
@@ -1139,6 +1331,20 @@ function dataView() {
   </section>`;
 }
 
+function pilotView() {
+  const session = pilotSession();
+  if (!session?.consent_confirmed) {
+    return `<section class="pilot-panel"><span class="eyebrow">PHASE 6 · FACILITATOR ONLY</span><h1>Usability Pilot 5 งาน</h1><p>เริ่มได้เมื่อผู้เข้าร่วมยินยอมและพร้อมใช้ข้อมูลสมมติเท่านั้น ระบบจะสร้างรหัสสุ่ม ไม่เก็บชื่อ อีเมล จำนวนเงิน ข้อความที่พิมพ์ หรือเวลาแบบละเอียดใน export</p><ul><li>อย่าใช้ข้อมูลการเงินจริง</li><li>ให้ผู้เข้าร่วมทำทีละงานโดยไม่ชี้ปุ่มก่อน</li><li>บันทึกผลเป็นตัวเลือกที่กำหนดเท่านั้น</li></ul><label class="consent-check"><input id="pilotConsent" type="checkbox" ${pilotConsentDraft ? 'checked' : ''}> ผู้เข้าร่วมยินยอมทดสอบและเข้าใจว่าจะใช้ข้อมูลสมมติ</label><div class="button-row"><button class="secondary" data-screen="data">กลับการตั้งค่า</button><button class="primary" data-action="start-pilot-session" ${pilotConsentDraft ? '' : 'disabled'}>เริ่ม session ใหม่ <span>→</span></button></div></section>`;
+  }
+  const progress = pilotProgress(session);
+  const completed = Boolean(session.finished_at);
+  return `<section class="pilot-panel"><span class="eyebrow">PHASE 6 · FACILITATOR ONLY</span><h1>${completed ? 'Pilot session พร้อม export' : `Pilot ${progress.finished}/${progress.total} งาน`}</h1><p>Participant code: <b>${escapeHtml(session.participant_code)}</b> · export นี้ไม่รวมข้อมูลการเงิน ตัวตน หรือข้อความอิสระ</p><div class="pilot-task-list">${PILOT_TASKS.map((task, index) => {
+    const record = session.tasks[task.id];
+    const isRated = ['completed', 'blocked'].includes(record.status);
+    return `<article class="pilot-task ${record.status}"><div><span>${index + 1}</span><h2>${escapeHtml(task.title)}</h2><p>${escapeHtml(task.prompt)}</p>${record.evidence.length ? `<small>หลักฐานในแอป: ${record.evidence.map((event) => escapeHtml(event.name)).join(', ')}</small>` : ''}</div>${record.status === 'not_started' ? `<button class="secondary" data-action="start-pilot-task" data-task-id="${task.id}" ${completed ? 'disabled' : ''}>เริ่มงาน</button>` : isRated ? `<div class="pilot-rated"><b>${record.outcome === 'blocked' ? 'ติดขัด' : record.outcome === 'completed_without_help' ? 'ทำเองได้' : 'ทำได้เมื่อช่วย'}</b><small>Ease ${record.ease}/7 · Help ${record.help_count}</small></div>` : `<form class="pilot-score" data-pilot-score="${task.id}"><label>ผล<select name="outcome"><option value="">เลือก</option><option value="completed_without_help">ทำเองได้</option><option value="completed_with_help">ทำได้เมื่อช่วย</option><option value="blocked">ติดขัด</option></select></label><label>Ease<select name="ease"><option value="">เลือก 1–7</option>${[1,2,3,4,5,6,7].map((number) => `<option value="${number}">${number}</option>`).join('')}</select></label><label>จำนวนครั้งที่ช่วย<input name="help_count" type="number" min="0" max="20" value="0"></label>${task.id === 'finish_explain' ? `<label>อธิบายได้<select name="comprehension"><option value="">เลือก</option><option value="clear">ชัดเจน</option><option value="unclear">ยังไม่ชัด</option></select></label>` : ''}<fieldset><legend>ปัญหาที่พบ (เลือกได้หลายข้อ)</legend>${['navigation','wording','visual_hierarchy','input','result_interpretation','accessibility','performance','other'].map((tag) => `<label><input type="checkbox" name="issue_tag" value="${tag}"> ${tag}</label>`).join('')}</fieldset><label class="pilot-safety"><input name="critical_safety" type="checkbox"> พบความเสี่ยงด้านความปลอดภัยสำคัญ</label><button class="primary" type="button" data-action="score-pilot-task" data-task-id="${task.id}">บันทึกผล</button></form>`}</article>`;
+  }).join('')}</div><div class="button-row"><button class="secondary" data-screen="data">กลับการตั้งค่า</button>${completed ? `<button class="secondary" data-action="reset-pilot">ล้างเฉพาะ session นี้</button><button class="primary" data-action="export-pilot">ดาวน์โหลด pilot export</button>` : `<button class="primary" data-action="finish-pilot" ${progress.finished === progress.total ? '' : 'disabled'}>ปิด session และเตรียม export</button>`}</div></section>`;
+}
+
 function deleteConfirmView() {
   const server = state.deleteScope === 'all';
   return `<section class="delete-panel"><span class="eyebrow">ยืนยันการลบ</span><h1>${server?'ลบ assessment/action ที่ sync และข้อมูลในอุปกรณ์?':'ลบร่างและประวัติในอุปกรณ์นี้?'}</h1><p>${server?'ระบบจะลบ assessment และ action ที่ sync บน server ส่วน Debt Map งานเตือน และความคืบหน้าบทเรียนรุ่นนี้เก็บในอุปกรณ์และจะถูกลบจากอุปกรณ์ด้วย การกระทำนี้ย้อนกลับไม่ได้':'ลบเฉพาะอุปกรณ์นี้ ไม่กระทบข้อมูลที่ sync บน server'}</p><div class="button-row"><button class="secondary" data-screen="data">ยกเลิก</button><button class="danger-button" data-action="confirm-delete">${server?'ลบตามรายการนี้':'ลบในอุปกรณ์'}</button></div></section>`;
@@ -1146,7 +1352,7 @@ function deleteConfirmView() {
 
 function errorPanel(error) {
   const message = error instanceof RulesError ? error.message : 'ยังสร้างแผนไม่ได้ กรุณาตรวจข้อมูลจำนวนเงิน';
-  return `<section class="error-panel" role="alert"><span>!</span><h1>ข้อมูลยังไม่พร้อม</h1><p>${escapeHtml(message)}</p><button class="primary" data-screen="intake-money">กลับไปตรวจข้อมูล <span>→</span></button></section>`;
+  return renderErrorPanel({ message, destination: 'intake-money' });
 }
 
 function persistAssessment(assessment) {
@@ -1180,6 +1386,8 @@ function persistAssessment(assessment) {
 }
 
 function render() {
+  const sameScreen = lastRenderedScreen === state.screen;
+  const priorFocus = sameScreen && !pendingFocusTarget ? focusIdentity(document.activeElement) : null;
   const views = {
     home: homeView,
     consent: consentView,
@@ -1198,26 +1406,38 @@ function render() {
     course: courseView,
     'course-lesson': courseLessonView,
     'course-quiz': courseQuizView,
+    'lesson-reflection': lessonReflectionView,
+    'course-action': courseActionView,
+    'learning-progress': learningProgressView,
     lesson: lessonView,
     history: historyView,
     data: dataView,
+    pilot: pilotView,
     'delete-confirm': deleteConfirmView
   };
   const view = views[state.screen] || homeView;
   app.innerHTML = `<div class="shell">${topBar()}<main id="main" class="content" tabindex="-1">
     ${state.notice ? `<div class="notice" role="alert">${escapeHtml(state.notice)}</div>` : ''}
-    ${view()}</main>${bottomNav()}</div>`;
-  document.querySelector('#main')?.focus({ preventScroll: true });
+    ${view()}</main>${pilotReturnDock()}${bottomNav()}</div>`;
+  lastRenderedScreen = state.screen;
   if (pendingFocusTarget) {
     const target = document.querySelector(`[data-field-anchor="${pendingFocusTarget}"]`) || document.querySelector(`#${pendingFocusTarget}`) || document.querySelector(`[name="${pendingFocusTarget}"]`);
     pendingFocusTarget = null;
     if (target) requestAnimationFrame(() => {
-      target.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      const control = target.matches('input,select,textarea,button') ? target : target.querySelector('input,select,textarea,button');
+      target.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      const control = target.matches('input,select,textarea,button,[tabindex]') ? target : target.querySelector('input,select,textarea,button,[tabindex]');
       control?.focus({ preventScroll: true });
       target.classList.add('focus-pulse');
       setTimeout(() => target.classList.remove('focus-pulse'), 900);
     });
+  } else if (priorFocus) {
+    requestAnimationFrame(() => {
+      const restored = findFocusIdentity(priorFocus);
+      const quizResult = document.querySelector('#quiz-result');
+      (restored || quizResult)?.focus({ preventScroll: true });
+    });
+  } else if (!sameScreen) {
+    document.querySelector('#main')?.focus({ preventScroll: true });
   }
 }
 
@@ -1258,13 +1478,38 @@ async function refreshSessionUser() {
 app.addEventListener('input', (event) => {
   const target = event.target;
   if (target.id === 'consent') state.consent = target.checked;
+  else if (target.id === 'pilotConsent') {
+    pilotConsentDraft = target.checked;
+    const startButton = document.querySelector('[data-action="start-pilot-session"]');
+    if (startButton) startButton.disabled = !pilotConsentDraft;
+    return;
+  }
   else if (target.id === 'unableToPay' || target.id === 'creditDataDisputed' || target.id === 'identityMisuseSuspected') {
     state.input[target.id] = target.checked;
   } else if (target.id === 'actionEvidence') state.actionEvidence = target.value;
   else if (target.id === 'lessonEvidence') {
     state.lessonEvidence = target.value;
+    if (typeof state.currentLesson === 'string') {
+      state.legacyLessonProgress[state.currentLesson] = {
+        ...(state.legacyLessonProgress[state.currentLesson] || {}),
+        mastery: state.mastery[state.currentLesson] || 'not_started',
+        evidence: target.value
+      };
+    }
     const completeButton = document.querySelector('[data-action="complete-lesson"]');
     if (completeButton) completeButton.disabled = !target.value.trim();
+  }
+  else if (target.id === 'reflectionTakeaway' || target.id === 'reflectionNextAction') {
+    const unit = unitById(state.currentUnitId);
+    if (unit) {
+      const reflection = state.lessonReflections[unit.id] || { takeaway: '', nextAction: '' };
+      reflection[target.id === 'reflectionTakeaway' ? 'takeaway' : 'nextAction'] = target.value;
+      state.lessonReflections[unit.id] = reflection;
+    }
+  }
+  else if (target.id === 'academyActionNote') {
+    const unit = unitById(state.currentUnitId);
+    if (unit) state.learningActions[unit.id] = { ...normalizeLearningAction(state.learningActions[unit.id]), note: target.value };
   }
   else if (target.id === 'authEmail') { authEmailDraft = target.value; return; }
   else if (target.id.startsWith('tax_')) {
@@ -1376,13 +1621,63 @@ app.addEventListener('click', async (event) => {
     state.screen = screen;
     pendingFocusTarget = target;
     state.notice = `เติม “${FIELD_LABELS[button.dataset.field] || button.dataset.field}” แล้วกลับมาสร้างแผนอีกครั้ง`;
+    addPilotAutoEvidence('fill_missing');
+  }
+  if (action === 'start-pilot-session') {
+    if (!pilotConsentDraft) state.notice = 'ต้องได้รับความยินยอมจากผู้เข้าร่วมก่อนเริ่ม Pilot';
+    else {
+      state.pilotSession = createPilotSession({ consentConfirmed: true });
+      pilotConsentDraft = false;
+      state.notice = 'เริ่ม Pilot แล้ว ใช้ข้อมูลสมมติและบันทึกผลเป็นตัวเลือกที่กำหนดเท่านั้น';
+    }
+  }
+  if (action === 'start-pilot-task') {
+    const taskId = button.dataset.taskId;
+    state.pilotSession = startPilotTask(pilotSession(), taskId);
+    const destinations = { resume_lesson: 'resume', finish_explain: 'resume', use_lab: 'tax-lab', identify_action: 'resume', recover_missing: 'diagnosis' };
+    const destination = destinations[taskId];
+    if (destination === 'resume') openAcademyResume();
+    else {
+      state.screen = !state.consent && SENSITIVE_SCREENS.has(destination) ? 'consent' : (destination || 'pilot');
+      if (destination === 'diagnosis') state.notice = 'Facilitator: ต้องเตรียมผล Route Check จากข้อมูลสมมติที่มีช่องขาดก่อนเริ่มงานนี้';
+    }
+  }
+  if (action === 'score-pilot-task') {
+    const taskId = button.dataset.taskId;
+    const form = document.querySelector(`[data-pilot-score="${taskId}"]`);
+    if (form) {
+      const fields = new FormData(form);
+      state.pilotSession = scorePilotTask(pilotSession(), taskId, {
+        outcome: fields.get('outcome'), ease: Number(fields.get('ease')), help_count: Number(fields.get('help_count')),
+        comprehension: fields.get('comprehension'), issue_tags: fields.getAll('issue_tag'), critical_safety: fields.get('critical_safety') === 'on'
+      });
+      const rated = pilotSession()?.tasks?.[taskId]?.status;
+      state.notice = ['completed', 'blocked'].includes(rated) ? 'บันทึกผล task แล้ว' : 'เลือก outcome, ease และ comprehension (สำหรับงานที่ 2) ให้ครบก่อน';
+    }
+  }
+  if (action === 'finish-pilot') {
+    state.pilotSession = finishPilotSession(pilotSession());
+    state.notice = state.pilotSession?.finished_at ? 'ปิด session แล้ว ตรวจทานและดาวน์โหลด pilot export ได้' : 'บันทึกผลให้ครบทั้ง 5 งานก่อนปิด session';
+  }
+  if (action === 'export-pilot') downloadPilotExport();
+  if (action === 'reset-pilot') {
+    const pilotStartedAt = Date.parse(pilotSession()?.started_at || '');
+    if (Number.isFinite(pilotStartedAt)) {
+      state.pilotEvents = (state.pilotEvents || []).filter((event) => {
+        const eventAt = Date.parse(event?.at || '');
+        return !Number.isFinite(eventAt) || eventAt < pilotStartedAt;
+      });
+    }
+    state.pilotSession = null;
+    pilotConsentDraft = false;
+    state.notice = 'ล้างข้อมูล Pilot session และ telemetry ที่เกิดระหว่าง session แล้ว ความก้าวหน้าและข้อมูลแอปส่วนอื่นไม่เปลี่ยน';
   }
   if (action === 'back') {
     const back = {
       consent:'home','intake-money':'consent','intake-status':'intake-money',
       'intake-details':'intake-status',diagnosis:'intake-details','action-plan':'diagnosis',
       portfolio:'home','debt-editor':'portfolio',payoff:'portfolio',reminders:'portfolio',
-      'tax-lab':'home','invest-sim':'home',learn:'home',course:'learn','course-lesson':'course','course-quiz':'course-lesson',lesson:'learn',history:'home',data:'home','delete-confirm':'data'
+      'tax-lab':'home','invest-sim':'home',learn:'home',course:'learn','course-lesson':'course','course-quiz':'course-lesson','lesson-reflection':'course-quiz','course-action':'lesson-reflection','learning-progress':'home',lesson:'learn',history:'home',data:'home',pilot:'data','delete-confirm':'data'
     };
     state.screen = back[state.screen] || 'home';
   }
@@ -1408,13 +1703,14 @@ app.addEventListener('click', async (event) => {
     if (!state.input.overdueBand || !(state.input.legalStages || []).length || !(state.input.debtTypes || []).length) {
       state.notice = 'กรุณายืนยันสถานะหนี้ ขั้นกฎหมาย และเลือกประเภทหนี้อย่างน้อยหนึ่งข้อ';
     } else if (assessment.error) state.notice = assessment.error.message;
-    else { syncDebtFromIntake(); state.assessmentSaved = null; state.clientAssessmentId = crypto.randomUUID(); state.remoteAssessmentId = null; state.screen = 'diagnosis'; state.notice = ''; trackPilot('route_completed',{route:assessment.result.route}); }
+    else { syncDebtFromIntake(); state.assessmentSaved = null; state.clientAssessmentId = crypto.randomUUID(); state.remoteAssessmentId = null; state.screen = 'diagnosis'; state.notice = ''; trackPilot('route_completed',{route:assessment.result.route}); addPilotAutoEvidence('route_created'); }
   }
   if (action === 'calculate-tax') {
     try {
       currentTaxEstimate();
       state.taxLab.calculated = true;
       state.notice = '';
+      addPilotAutoEvidence('lab_calculated');
     } catch (error) {
       state.taxLab.calculated = true;
       state.notice = error instanceof TaxLabError || error instanceof RulesError ? error.message : 'ตรวจตัวเลขภาษีอีกครั้ง';
@@ -1473,6 +1769,7 @@ app.addEventListener('click', async (event) => {
       const latest = state.investmentGame.history.at(-1);
       state.investmentDecision.allocation = { ...latest.target_allocation };
       state.notice = state.investmentGame.completed ? 'จบ Investment Committee simulation 12 ไตรมาสแล้ว' : '';
+      addPilotAutoEvidence('lab_advanced');
     } catch (error) { state.notice = error.message || 'ยังจำลองเดือนถัดไปไม่ได้'; }
   }
   if (action === 'reset-investment-sim') {
@@ -1487,6 +1784,7 @@ app.addEventListener('click', async (event) => {
       state.notice = 'บันทึก investment audit ไว้ในประวัติแล้ว';
     } catch (error) { state.notice = error.message || 'ยังบันทึกผลไม่ได้'; }
   }
+  if (action === 'resume-learning') { openAcademyResume(); addPilotAutoEvidence('lesson_opened'); }
   if (action === 'open-course') {
     const course = courseById(button.dataset.course || state.selectedCourse);
     state.selectedCourse = course.id;
@@ -1506,7 +1804,9 @@ app.addEventListener('click', async (event) => {
       state.quizAnswers = {};
       state.quizSubmitted = false;
       state.screen = 'course-lesson';
+      rememberAcademyScreen('course-lesson', unit, state.lessonStep);
       state.notice = '';
+      addPilotAutoEvidence('lesson_opened');
     }
   }
   if (action === 'go-lesson-step') {
@@ -1515,6 +1815,7 @@ app.addEventListener('click', async (event) => {
     state.lessonStep = nextStep;
     const record = curriculumRecord(unit.id);
     state.curriculumProgress[unit.id] = { ...record, status: 'in_progress', step: Math.max(Number(record.step || 0), nextStep + 1) };
+    rememberAcademyScreen('course-lesson', unit, nextStep);
   }
   if (action === 'lesson-next' || action === 'lesson-previous') {
     const unit = unitById(state.currentUnitId);
@@ -1523,6 +1824,7 @@ app.addEventListener('click', async (event) => {
       state.lessonStep = Math.max(0, Math.min(Number(state.lessonStep || 0) + direction, unit.steps.length - 1));
       const record = curriculumRecord(unit.id);
       state.curriculumProgress[unit.id] = { ...record, status: 'in_progress', step: Math.max(Number(record.step || 0), state.lessonStep + 1) };
+      rememberAcademyScreen('course-lesson', unit, state.lessonStep);
     }
   }
   if (action === 'answer-practice') {
@@ -1537,6 +1839,7 @@ app.addEventListener('click', async (event) => {
       state.quizAnswers = {};
       state.quizSubmitted = false;
       state.screen = 'course-quiz';
+      rememberAcademyScreen('course-quiz', unit, unit.steps.length);
     }
   }
   if (action === 'answer-quiz' && !state.quizSubmitted) {
@@ -1551,18 +1854,70 @@ app.addEventListener('click', async (event) => {
       const passed = bestScore >= PASSING_SCORE;
       state.curriculumProgress[unit.id] = { ...record, status: passed ? 'completed' : 'in_progress', step: unit.steps.length, bestScore, ...(passed ? { completedAt: new Date().toISOString() } : {}) };
       state.quizSubmitted = true;
+      pendingFocusTarget = 'quiz-result';
+      rememberAcademyScreen(passed ? 'lesson-reflection' : 'course-quiz', unit, unit.steps.length);
       if (passed && Number(record.bestScore || 0) < PASSING_SCORE) state.history.push({ date: today(), title: `ผ่าน Level ${unit.level} · ${courseById(unit.course).shortTitle}`, note: `${unit.title} · คะแนน ${score}/${unit.quiz.length}` });
+      if (passed) addPilotAutoEvidence('quiz_passed');
     }
   }
   if (action === 'retry-course-quiz') {
     state.quizAnswers = {};
     state.quizSubmitted = false;
+    const unit = unitById(state.currentUnitId);
+    if (unit) rememberAcademyScreen('course-quiz', unit, unit.steps.length);
+  }
+  if (action === 'open-reflection') {
+    const unit = unitById(state.currentUnitId);
+    if (unit && Number(curriculumRecord(unit.id).bestScore || 0) >= PASSING_SCORE) {
+      state.lessonReflections[unit.id] = state.lessonReflections[unit.id] || { takeaway: '', nextAction: '' };
+      state.lessonReflections[unit.id] = { ...state.lessonReflections[unit.id], status: 'draft' };
+      state.screen = 'lesson-reflection';
+      rememberAcademyScreen('lesson-reflection', unit, unit.steps.length);
+      state.notice = '';
+      addPilotAutoEvidence('reflection_opened');
+    }
+  }
+  if (action === 'save-reflection' || action === 'skip-reflection') {
+    const unit = unitById(state.currentUnitId);
+    if (unit) {
+      state.lessonReflections[unit.id] = {
+        ...(state.lessonReflections[unit.id] || { takeaway: '', nextAction: '' }),
+        status: action === 'save-reflection' ? 'saved' : 'skipped',
+        updatedAt: new Date().toISOString()
+      };
+      state.screen = 'course-action';
+      rememberAcademyScreen('course-action', unit, unit.steps.length);
+    }
+    state.notice = action === 'save-reflection' ? 'บันทึก reflection แล้ว เลือกงานจริงที่จะทำต่อ' : '';
+    if (action === 'save-reflection') addPilotAutoEvidence('reflection_saved');
+  }
+  if (action === 'save-course-action' || action === 'skip-course-action') {
+    const unit = unitById(state.currentUnitId);
+    if (unit) {
+      const applyStep = unit.steps.find((step) => step.type === 'apply') || unit.steps.at(-1);
+      const reflection = state.lessonReflections?.[unit.id] || {};
+      const existing = normalizeLearningAction(state.learningActions?.[unit.id]);
+      const note = existing.note.trim() || String(reflection.nextAction || applyStep.artifact || applyStep.title).trim();
+      const actionChanged = existing.status !== 'planned' || existing.note.trim() !== note;
+      state.learningActions[unit.id] = {
+        ...existing,
+        status: action === 'save-course-action' ? 'planned' : 'skipped',
+        note: action === 'save-course-action' ? note : existing.note,
+        updatedAt: new Date().toISOString()
+      };
+      if (action === 'save-course-action' && actionChanged) state.history.push({ date: today(), title: `Action หลังเรียน · ${courseById(unit.course).shortTitle}`, note });
+      state.screen = 'learning-progress';
+      rememberAcademyScreen('learning-progress', unit, unit.steps.length);
+      state.notice = action === 'save-course-action' ? 'บันทึก action แล้ว กลับมาเช็กผลได้จากหน้าความก้าวหน้า' : '';
+      if (action === 'save-course-action') addPilotAutoEvidence('next_action_saved');
+    }
   }
   if (action === 'return-to-lesson') {
     const unit = unitById(state.currentUnitId);
     if (unit) state.lessonStep = unit.steps.length - 1;
     state.quizSubmitted = false;
     state.screen = 'course-lesson';
+    if (unit) rememberAcademyScreen('course-lesson', unit, state.lessonStep);
   }
   if (action === 'open-next-unit') {
     const unit = unitById(state.currentUnitId);
@@ -1576,6 +1931,7 @@ app.addEventListener('click', async (event) => {
       state.quizAnswers = {};
       state.quizSubmitted = false;
       state.screen = 'course-lesson';
+      rememberAcademyScreen('course-lesson', next, 0);
     } else {
       state.screen = 'course';
       state.notice = unit?.level === course.units.length - 1 ? 'ผ่านครบทั้งหลักสูตรแล้ว' : '';
@@ -1584,7 +1940,8 @@ app.addEventListener('click', async (event) => {
   if (action === 'open-lesson') {
     state.currentLesson = button.dataset.lesson || LEARNING_UNITS[0].id;
     state.lessonAnswerRevealed = false;
-    state.lessonEvidence = '';
+    state.lessonEvidence = state.legacyLessonProgress?.[state.currentLesson]?.evidence || '';
+    state.learningResume = { kind: 'legacy', screen: 'lesson', legacyLessonId: state.currentLesson, updatedAt: new Date().toISOString() };
     state.screen = 'lesson';
   }
   if (action === 'request-link') {
@@ -1666,10 +2023,12 @@ app.addEventListener('click', async (event) => {
   if (action === 'reveal-answer') {
     state.lessonAnswerRevealed = true;
     state.mastery[state.currentLesson] = state.mastery[state.currentLesson] === 'evidence_recorded' ? 'evidence_recorded' : 'understood';
+    state.legacyLessonProgress[state.currentLesson] = { ...(state.legacyLessonProgress[state.currentLesson] || {}), mastery: state.mastery[state.currentLesson], evidence: state.lessonEvidence };
   }
   if (action === 'start-lesson-action') {
     const unit = LEARNING_UNITS.find((item)=>item.id===state.currentLesson) || LEARNING_UNITS[0];
     state.mastery[unit.id] = state.mastery[unit.id] === 'evidence_recorded' ? 'evidence_recorded' : 'action_taken';
+    state.legacyLessonProgress[unit.id] = { ...(state.legacyLessonProgress[unit.id] || {}), mastery: state.mastery[unit.id], evidence: state.lessonEvidence };
     state.history.push({ date: today(), title: 'งานจากบทเรียน', note: unit.action.label });
     state.notice = 'บันทึกงานจากบทเรียนในประวัติแล้ว';
   }
@@ -1678,6 +2037,7 @@ app.addEventListener('click', async (event) => {
     if (!state.lessonEvidence.trim()) { state.notice = 'ใส่เลขรับเรื่อง วันนัด หรือหลักฐานผลลัพธ์ก่อน'; }
     else {
       state.mastery[unit.id] = 'evidence_recorded';
+      state.legacyLessonProgress[unit.id] = { mastery: 'evidence_recorded', evidence: state.lessonEvidence.trim() };
       state.history.push({ date: today(), title: 'ผู้ใช้บันทึกหลักฐานจากบทเรียน', note: `${unit.decision} · ${state.lessonEvidence.trim()}` });
       state.lessonEvidence = '';
       state.screen = 'learn';
@@ -1717,7 +2077,7 @@ app.addEventListener('click', async (event) => {
     state.screen = 'history';
   }
   if (action === 'export-data') {
-    const exportValue = { exported_at: new Date().toISOString(), schema_version: state.schemaVersion, input: state.input, debts: state.debts, history: state.history, snapshots: state.snapshots, reminders: state.reminders, mastery: state.mastery, pilot_events: state.pilotEvents };
+    const exportValue = { exported_at: new Date().toISOString(), schema_version: state.schemaVersion, input: state.input, debts: state.debts, history: state.history, snapshots: state.snapshots, reminders: state.reminders, mastery: state.mastery, lesson_evidence: state.lessonEvidence, legacy_lesson_progress: state.legacyLessonProgress, curriculum_progress: state.curriculumProgress, lesson_reflections: state.lessonReflections, learning_actions: state.learningActions, learning_resume: state.learningResume, pilot_events: state.pilotEvents };
     const blob = new Blob([JSON.stringify(exportValue,null,2)],{type:'application/json'});
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob); link.download = `first-jobber-debt-data-${today()}.json`; link.click();
