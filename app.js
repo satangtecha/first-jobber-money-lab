@@ -653,6 +653,8 @@ function homeView() {
     <article class="mc-lab-card debt"><div class="mc-lab-mascot">${mascotSVG('run')}</div><div class="mc-lab-body"><div class="mc-lab-top"><span class="eyebrow">DEBT NAVIGATOR</span><span class="mc-lab-state">ยอดที่รายงาน ${total}</span></div><h2>เปลี่ยนข้อมูลหนี้เป็นทางออก</h2><p>${meta ? escapeHtml(meta.title) : 'คัด route เตรียมคำพูด และเก็บหลักฐานการติดต่อเจ้าหนี้ตามสถานะจริง'}</p><div class="mini-route" aria-hidden="true"><i></i><i></i><i></i><i></i></div><button class="secondary" data-screen="${meta ? 'diagnosis' : 'consent'}">${meta ? 'ดู Action Pack' : 'เริ่ม Route Check'} ${renderIcon('arrow')}</button></div></article>
   </section>
   <section class="mc-trust-strip"><span>${renderIcon('shield')}</span><div><b>พื้นที่ซ้อมตัดสินใจ</b><p>ไม่เชื่อมบัญชีลงทุนหรือส่งคำสั่งเงินจริง เนื้อหาสำคัญมีแหล่งข้อมูลและวันที่ทบทวน</p></div><button class="text-action" data-screen="data">ดูการใช้ข้อมูล</button></section>`;
+}
+
 const taxMoney = (value) => String(value ?? '').trim() ? parseBaht(value) : 0n;
 function currentTaxEstimate() {
   const t = state.taxLab;
